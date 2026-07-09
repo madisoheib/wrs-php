@@ -1,0 +1,7 @@
+/target
+**/node_modules
+**/vendor
+resonance.toml
+storage/resonance.toml
+bin/resonance
+*.log

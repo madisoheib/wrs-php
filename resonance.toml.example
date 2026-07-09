@@ -1,0 +1,14 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[[apps]]
+id = "app1"
+key = "resonance-key"
+secret = "resonance-secret"
+max_connections = 0        # 0 = unlimited
+
+[limits]
+max_message_size_kb = 10
+activity_timeout_s = 120
+max_channels_per_connection = 100

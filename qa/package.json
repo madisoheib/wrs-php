@@ -1,0 +1,10 @@
+{
+  "name": "resonance-qa",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pusher": "^5.2.0",
+    "pusher-js": "^8.4.0",
+    "ws": "^8.18.0"
+  }
+}

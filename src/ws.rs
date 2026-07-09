@@ -1,10 +1,12 @@
-use crate::state::{error_frame, frame, sign, App, ChannelKey, Conn, State};
+use crate::state::{error_frame, frame, sign, App, ChannelKey, Conn, State, Sub};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, Notify};
+use tokio::time::Instant;
 
 pub async fn handle(ws: WebSocket, state: Arc<State>, app: App) {
     let socket_id = state.new_socket_id();
@@ -33,24 +35,56 @@ pub async fn handle(ws: WebSocket, state: Arc<State>, app: App) {
     let (mut sink, mut stream) = ws.split();
     let mut rx = rx;
     let writer = tokio::spawn(async move {
-        while let Some(m) = rx.recv().await {
-            if sink.send(m).await.is_err() {
+        // Batch queued messages per flush: one syscall for a fan-out burst
+        // instead of one per message.
+        let mut batch: Vec<Message> = Vec::with_capacity(16);
+        loop {
+            if rx.recv_many(&mut batch, 16).await == 0 {
+                break;
+            }
+            let mut dead = false;
+            for m in batch.drain(..) {
+                if sink.feed(m).await.is_err() {
+                    dead = true;
+                    break;
+                }
+            }
+            if dead || sink.flush().await.is_err() {
                 break;
             }
         }
         let _ = sink.close().await;
     });
 
+    // Activity timeout (spec 3.5): any inbound traffic resets the clock; after
+    // activity_timeout we ping, and evict if nothing comes back within 30s.
+    let activity = Duration::from_secs(state.limits.activity_timeout_s);
+    let grace = Duration::from_secs(30);
+    let mut deadline = Instant::now() + activity;
+    let mut pinged = false;
+
     let mut subs: HashSet<String> = HashSet::new();
     loop {
         tokio::select! {
-            item = stream.next() => match item {
-                Some(Ok(Message::Text(t))) => {
-                    on_text(&state, &app, &socket_id, &tx, &mut subs, t.as_str()).await;
+            item = stream.next() => {
+                deadline = Instant::now() + activity;
+                pinged = false;
+                match item {
+                    Some(Ok(Message::Text(t))) => {
+                        on_text(&state, &app, &socket_id, &tx, &kill, &mut subs, t.as_str()).await;
+                    }
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
                 }
-                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                _ => {}
+            },
+            _ = tokio::time::sleep_until(deadline) => {
+                if pinged {
+                    break; // no pong within grace -> dead connection
+                }
+                let _ = tx.try_send(frame("pusher:ping", None, "{}".into()));
+                pinged = true;
+                deadline = Instant::now() + grace;
             },
             _ = kill.notified() => break,
         }
@@ -65,6 +99,7 @@ async fn on_text(
     app: &App,
     socket_id: &str,
     tx: &mpsc::Sender<Message>,
+    kill: &Arc<Notify>,
     subs: &mut HashSet<String>,
     text: &str,
 ) {
@@ -80,7 +115,7 @@ async fn on_text(
         "pusher:ping" => {
             let _ = tx.send(frame("pusher:pong", None, "{}".into())).await;
         }
-        "pusher:subscribe" => subscribe(state, app, socket_id, tx, subs, &v).await,
+        "pusher:subscribe" => subscribe(state, app, socket_id, tx, kill, subs, &v).await,
         "pusher:unsubscribe" => {
             if let Some(ch) = v.get("data").and_then(|d| d.get("channel")).and_then(|c| c.as_str()) {
                 if subs.remove(ch) {
@@ -98,6 +133,7 @@ async fn subscribe(
     app: &App,
     socket_id: &str,
     tx: &mpsc::Sender<Message>,
+    kill: &Arc<Notify>,
     subs: &mut HashSet<String>,
     v: &serde_json::Value,
 ) {
@@ -133,7 +169,7 @@ async fn subscribe(
         .entry((app.id.clone(), channel.clone()))
         .or_default()
         .subscribers
-        .insert(socket_id.to_string(), tx.clone());
+        .insert(socket_id.to_string(), Sub { tx: tx.clone(), kill: kill.clone() });
     subs.insert(channel.clone());
 
     let _ = tx

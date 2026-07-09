@@ -159,9 +159,10 @@ async fn main() {
         eprintln!("Cannot bind {addr}: {e}");
         std::process::exit(1);
     });
-    // ponytail: TCP_NODELAY not set per-socket (axum::serve owns the accept
-    // loop). Add a custom accept loop with set_nodelay(true) when latency
-    // benchmarks call for it — see spec 3.4 / 5.4.
+    // Latency beats throughput for real-time: disable Nagle on every socket.
+    let listener = axum::serve::ListenerExt::tap_io(listener, |io| {
+        let _ = io.set_nodelay(true);
+    });
     tracing::info!("resonance listening on {addr} ({} app(s))", state.apps.len());
     axum::serve(listener, app).await.unwrap();
 }

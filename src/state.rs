@@ -30,11 +30,19 @@ pub struct Conn {
     pub app_id: String,
 }
 
+/// Per-subscriber handle stored directly in the channel: fan-out clones two
+/// refcounted pointers (Sender + Notify) — zero allocations, no second map hop,
+/// and a slow consumer can be killed without a connections lookup.
+#[derive(Clone)]
+pub struct Sub {
+    pub tx: mpsc::Sender<Message>,
+    pub kill: Arc<Notify>,
+}
+
 #[derive(Default)]
 pub struct ChannelState {
-    // socket_id -> sender. Storing the sender here keeps fan-out to a single
-    // shard lookup (no second connections-map hop on the hot path).
-    pub subscribers: HashMap<String, mpsc::Sender<Message>>,
+    // socket_id -> subscriber handle
+    pub subscribers: HashMap<String, Sub>,
 }
 
 pub struct State {

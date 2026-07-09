@@ -55,8 +55,9 @@ pub async fn events(
         // cheap refcounted clone (Utf8Bytes/Bytes), never a re-serialization.
         let msg = frame(name, Some(channel), data.clone());
 
-        // Brief shard lock: clone the senders, then release before sending.
-        let targets: Vec<(String, tokio::sync::mpsc::Sender<_>)> = match state
+        // Brief shard lock: clone the subscriber handles (Sender + Notify Arc
+        // bumps only — no allocation per subscriber), release before sending.
+        let targets: Vec<crate::state::Sub> = match state
             .channels
             .get(&(app.id.clone(), channel.clone()))
         {
@@ -64,18 +65,16 @@ pub async fn events(
                 .subscribers
                 .iter()
                 .filter(|(sid, _)| Some(sid.as_str()) != except)
-                .map(|(sid, tx)| (sid.clone(), tx.clone()))
+                .map(|(_, sub)| sub.clone())
                 .collect(),
             None => continue,
         };
 
-        for (sid, tx) in targets {
+        for sub in targets {
             // Non-blocking. Full buffer == slow consumer: kill it so it can't
             // drag down the fan-out for everyone else.
-            if tx.try_send(msg.clone()).is_err() {
-                if let Some(conn) = state.connections.get(&sid) {
-                    conn.kill.notify_one();
-                }
+            if sub.tx.try_send(msg.clone()).is_err() {
+                sub.kill.notify_one();
             }
         }
     }
@@ -106,11 +105,12 @@ fn verify(
         return Err("Stale auth_timestamp");
     }
 
-    if let Some(expected_md5) = q.get("body_md5") {
-        let got = hex::encode(Md5::digest(body));
-        if got.as_bytes().ct_eq(expected_md5.as_bytes()).unwrap_u8() == 0 {
-            return Err("body_md5 mismatch");
-        }
+    // Required: the HMAC only covers the query string, so without body_md5 the
+    // body itself would be unauthenticated (replayable with a swapped payload).
+    let expected_md5 = q.get("body_md5").ok_or("Missing body_md5")?;
+    let got = hex::encode(Md5::digest(body));
+    if got.as_bytes().ct_eq(expected_md5.as_bytes()).unwrap_u8() == 0 {
+        return Err("body_md5 mismatch");
     }
 
     let provided = q.get("auth_signature").ok_or("Missing auth_signature")?;
@@ -169,5 +169,9 @@ mod tests {
         // Stale timestamp.
         let old = signed("secret", "key", body, now - 601);
         assert!(verify("key", "secret", "POST", "/apps/app1/events", &old, body).is_err());
+        // body_md5 must be present — otherwise the body is unauthenticated.
+        let mut no_md5 = signed("secret", "key", body, now);
+        no_md5.remove("body_md5");
+        assert!(verify("key", "secret", "POST", "/apps/app1/events", &no_md5, body).is_err());
     }
 }

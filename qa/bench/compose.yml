@@ -1,0 +1,23 @@
+services:
+  resonance:
+    image: resonance:qa
+    ports:
+      - "8080:8080"
+    ulimits:
+      nofile: { soft: 1048576, hard: 1048576 }
+
+  reverb:
+    build:
+      context: ../..
+      dockerfile: qa/bench/Dockerfile.reverb
+    ports:
+      - "8081:8080"
+    ulimits:
+      nofile: { soft: 1048576, hard: 1048576 }
+    environment:
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      REVERB_APP_ID: app1
+      REVERB_APP_KEY: resonance-key
+      REVERB_APP_SECRET: resonance-secret
+      REVERB_HOST: 0.0.0.0
+      REVERB_PORT: "8080"

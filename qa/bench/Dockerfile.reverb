@@ -1,0 +1,8 @@
+# Laravel Reverb server, for a like-for-like comparison. Reuses the already-built
+# laravel-app image and just adds Reverb. Reverb also speaks the Pusher protocol,
+# so the same bench client hits it unchanged.
+FROM laravel-app
+# Reverb needs pcntl/posix/sockets for its event loop + signal handling.
+RUN install-php-extensions pcntl posix sockets \
+    && composer require laravel/reverb --no-interaction
+CMD ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]

@@ -173,7 +173,13 @@ async fn ws_route(
 ) -> Response {
     let app = state.app_by_key(&key).cloned();
     let max = state.limits.max_message_size;
-    ws.max_message_size(max).max_frame_size(max).on_upgrade(move |socket| async move {
+    // Default tungstenite write buffer is ~128KB/conn — far above the spec's
+    // <20KB/conn target. Real-time frames are small; keep buffers tiny.
+    ws.max_message_size(max)
+        .max_frame_size(max)
+        .write_buffer_size(4 * 1024)
+        .max_write_buffer_size(64 * 1024)
+        .on_upgrade(move |socket| async move {
         match app {
             Some(app) => ws::handle(socket, state, app).await,
             None => {

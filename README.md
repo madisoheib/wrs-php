@@ -59,9 +59,14 @@ published when available.*
 
 ### 1. Get the binary
 
-Download from [Releases](https://github.com/madisoheib/wrs-php/releases)
-(Linux x86_64/ARM64 — fully static musl, macOS Intel/Apple Silicon, Windows),
-or with Docker:
+One-liner (Linux x86_64/ARM64, macOS Intel/Apple Silicon — verifies SHA-256):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/madisoheib/wrs-php/main/install.sh | sh
+```
+
+Or download manually from [Releases](https://github.com/madisoheib/wrs-php/releases)
+(includes Windows), or with Docker:
 
 ```bash
 docker run -p 8080:8080 ghcr.io/madisoheib/wrs-php:latest

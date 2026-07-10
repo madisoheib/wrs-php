@@ -4,11 +4,11 @@
     "license": "MIT",
     "keywords": ["laravel", "broadcasting", "websockets", "pusher", "realtime"],
     "require": {
-        "php": ">=8.1",
-        "illuminate/broadcasting": "*",
-        "illuminate/console": "*",
-        "illuminate/support": "*",
-        "pusher/pusher-php-server": ">=7.0"
+        "php": ">=7.4",
+        "illuminate/broadcasting": "^6.0|^7.0|^8.0|^9.0|^10.0|^11.0|^12.0|^13.0",
+        "illuminate/console": "^6.0|^7.0|^8.0|^9.0|^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^6.0|^7.0|^8.0|^9.0|^10.0|^11.0|^12.0|^13.0",
+        "pusher/pusher-php-server": "^3.0|^4.0|^5.0|^6.0|^7.0"
     },
     "autoload": {
         "psr-4": {

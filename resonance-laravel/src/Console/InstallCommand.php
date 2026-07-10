@@ -74,7 +74,7 @@ class InstallCommand extends Command
         }
         // $http_response_header is set by the stream wrapper.
         $status = isset($http_response_header[0]) ? $http_response_header[0] : '';
-        if (! str_contains($status, ' 200')) {
+        if (strpos($status, ' 200') === false) {
             return null;
         }
         return $body;

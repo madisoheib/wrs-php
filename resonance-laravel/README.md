@@ -11,8 +11,9 @@ just wires Laravel to it and manages the binary for you.
 
 ## Requirements
 
-- PHP ≥ 8.1
-- Laravel (any currently supported version)
+- PHP ≥ 7.4
+- Laravel 6, 7, 8, 9, 10, 11, 12 or 13 — one package version covers all
+  (verified end-to-end on Laravel 6/PHP 7.4 and Laravel 13/PHP 8.3)
 
 ## Installation
 
@@ -30,7 +31,8 @@ Releases, verifies its SHA-256 checksum and drops it in `./bin`.
 Switching an existing Pusher/Reverb app is **environment-only** — no code changes:
 
 ```dotenv
-BROADCAST_CONNECTION=resonance
+BROADCAST_CONNECTION=resonance   # Laravel 11+
+# BROADCAST_DRIVER=resonance     # Laravel 6-10 use this variable instead
 
 RESONANCE_APP_ID=app1
 RESONANCE_KEY=my-key

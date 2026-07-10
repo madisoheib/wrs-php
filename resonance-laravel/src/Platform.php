@@ -8,28 +8,30 @@ namespace Resonance\Laravel;
  */
 class Platform
 {
-    /** Map php_uname() os/machine to a Rust release target triple, or null if unsupported. */
+    /**
+     * Map php_uname() os/machine to a Rust release target triple, or null if unsupported.
+     * PHP 7.4-compatible syntax (no match/str_contains) — Laravel 6 runs on 7.4.
+     */
     public static function target(string $os, string $machine): ?string
     {
         $os = strtolower($os);
         $m = strtolower($machine);
 
-        $arch = match (true) {
-            in_array($m, ['x86_64', 'amd64'], true) => 'x86_64',
-            in_array($m, ['aarch64', 'arm64'], true) => 'aarch64',
-            default => null,
-        };
-        if ($arch === null) {
+        if (in_array($m, ['x86_64', 'amd64'], true)) {
+            $arch = 'x86_64';
+        } elseif (in_array($m, ['aarch64', 'arm64'], true)) {
+            $arch = 'aarch64';
+        } else {
             return null;
         }
 
-        if (str_contains($os, 'linux')) {
+        if (strpos($os, 'linux') !== false) {
             return "{$arch}-unknown-linux-musl";
         }
-        if (str_contains($os, 'darwin')) {
+        if (strpos($os, 'darwin') !== false) {
             return "{$arch}-apple-darwin";
         }
-        if (str_contains($os, 'windows') || str_contains($os, 'winnt')) {
+        if (strpos($os, 'windows') !== false || strpos($os, 'winnt') !== false) {
             return $arch === 'x86_64' ? 'x86_64-pc-windows-msvc' : null;
         }
         return null;
@@ -38,7 +40,7 @@ class Platform
     /** Asset file name for a target (Windows binaries carry .exe). */
     public static function assetName(string $target): string
     {
-        return str_contains($target, 'windows') ? "resonance-{$target}.exe" : "resonance-{$target}";
+        return strpos($target, 'windows') !== false ? "resonance-{$target}.exe" : "resonance-{$target}";
     }
 
     /** Render a server resonance.toml from the Laravel config array. */

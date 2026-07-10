@@ -7,7 +7,13 @@ use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 
 class TestEvent implements ShouldBroadcastNow
 {
-    public function __construct(public string $msg) {}
+    /** @var string */
+    public $msg;
+
+    public function __construct(string $msg)
+    {
+        $this->msg = $msg;
+    }
 
     public function broadcastOn(): Channel
     {

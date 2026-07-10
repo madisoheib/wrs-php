@@ -2,7 +2,6 @@
 
 namespace Resonance\Laravel;
 
-use Illuminate\Broadcasting\Broadcasters\PusherBroadcaster;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\ServiceProvider;
 use Pusher\Pusher;
@@ -34,9 +33,9 @@ class ResonanceServiceProvider extends ServiceProvider
             $this->commands([InstallCommand::class, StartCommand::class]);
         }
 
-        // The server speaks Pusher, so we reuse Laravel's PusherBroadcaster
-        // verbatim — just point its client at resonance. Users set
-        // BROADCAST_CONNECTION and a 'driver' => 'resonance' connection.
+        // The server speaks Pusher, so we build on Laravel's PusherBroadcaster —
+        // ResonanceBroadcaster only normalizes the pusher lib's trigger()
+        // signature so Laravel 6 through 13 all work with one package version.
         Broadcast::extend('resonance', function ($app, $config) {
             $c = config('resonance');
             $pusher = new Pusher($c['key'], $c['secret'], $c['app_id'], [
@@ -47,7 +46,7 @@ class ResonanceServiceProvider extends ServiceProvider
                 'encrypted' => $c['scheme'] === 'https',
             ]);
 
-            return new PusherBroadcaster($pusher);
+            return new ResonanceBroadcaster($pusher);
         });
     }
 }

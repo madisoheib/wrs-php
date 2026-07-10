@@ -436,3 +436,60 @@ async fn pipe_close(ws: WebSocket) -> Result<(), axum::Error> {
     let mut ws = ws;
     ws.close().await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        App {
+            id: "a".into(),
+            key: "k".into(),
+            secret: "s".into(),
+            max_connections: 0,
+            webhook_url: None,
+        }
+    }
+
+    // ponytail: deterministic adversarial corpus, not libFuzzer — cargo-fuzz
+    // needs a nightly toolchain this env lacks. Panics are the only crash
+    // vector in safe Rust; this hammers the parsing paths with hostile input.
+    #[test]
+    fn auth_ok_never_panics_on_garbage() {
+        let a = app();
+        let mut lcg: u64 = 0x5EED;
+        let mut junk = String::new();
+        for i in 0..5000 {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let c = char::from_u32((lcg % 0x2FFFF) as u32).unwrap_or('\u{FFFD}');
+            junk.push(c);
+            if junk.len() > 300 {
+                junk.clear();
+            }
+            let cases = [
+                serde_json::json!({"auth": junk}),
+                serde_json::json!({"auth": format!("{junk}:{junk}")}),
+                serde_json::json!({"auth": format!("k:{junk}")}),
+                serde_json::json!({"auth": null}),
+                serde_json::json!({"auth": i}),
+                serde_json::json!({}),
+                serde_json::json!({"auth": ":"}),
+                serde_json::json!({"auth": "k:"}),
+            ];
+            for data in &cases {
+                // must never panic; garbage must never authenticate
+                assert!(!auth_ok(&a, "1.1", "private-x", data, None));
+                assert!(!auth_ok(&a, &junk, &junk, data, Some(&junk)));
+            }
+        }
+    }
+
+    #[test]
+    fn rate_limiter_caps_within_window() {
+        let mut r = RateLimiter::new(3);
+        assert!(r.allow());
+        assert!(r.allow());
+        assert!(r.allow());
+        assert!(!r.allow()); // 4th in the same second is refused
+    }
+}

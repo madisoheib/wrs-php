@@ -342,4 +342,57 @@ mod tests {
         no_md5.remove("body_md5");
         assert!(verify("key", "secret", "POST", "/apps/app1/events", &no_md5, body).is_err());
     }
+
+    // Adversarial sweep: verify() and publish() must never panic and never
+    // accept garbage, whatever the query/payload shape.
+    #[test]
+    fn hostile_inputs_never_panic_never_authenticate() {
+        let state = crate::state::State::new(
+            vec![crate::state::App {
+                id: "a".into(),
+                key: "k".into(),
+                secret: "s".into(),
+                max_connections: 0,
+                webhook_url: None,
+            }],
+            crate::state::Limits {
+                max_message_size: 10240,
+                activity_timeout_s: 120,
+                max_channels_per_connection: 100,
+                allowed_origins: vec![],
+                client_event_rate: 10,
+            },
+            None,
+        );
+
+        let mut lcg: u64 = 0xC0FFEE;
+        let mut junk = String::new();
+        for _ in 0..3000 {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            junk.push(char::from_u32((lcg % 0x2FFFF) as u32).unwrap_or('\u{FFFD}'));
+            if junk.len() > 200 {
+                junk.clear();
+            }
+            // hostile query maps
+            let mut q = BTreeMap::new();
+            q.insert(junk.clone(), junk.clone());
+            q.insert("auth_key".into(), junk.clone());
+            q.insert("auth_timestamp".into(), junk.clone());
+            q.insert("auth_signature".into(), junk.clone());
+            q.insert("body_md5".into(), junk.clone());
+            assert!(verify("k", "s", "POST", &junk, &q, junk.as_bytes()).is_err());
+
+            // hostile publish payloads
+            let payloads = [
+                serde_json::json!({"name": junk, "data": junk, "channel": junk}),
+                serde_json::json!({"name": null, "data": {"deep": [[[[junk.clone()]]]]}, "channels": [junk, 42, null]}),
+                serde_json::json!({"channels": junk, "socket_id": {"x": 1}}),
+                serde_json::json!([junk]),
+                serde_json::json!(junk),
+            ];
+            for p in &payloads {
+                let _ = publish(&state, "a", p); // Err or Ok, but no panic
+            }
+        }
+    }
 }

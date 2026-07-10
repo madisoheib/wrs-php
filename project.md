@@ -1,320 +1,320 @@
-# Spécification technique — Serveur WebSocket Rust pour l'écosystème PHP
+# Technical Specification — Rust WebSocket Server for the PHP Ecosystem
 
-**Nom de code provisoire :** `resonance` (à remplacer)
-**Version du document :** 0.1 — Juillet 2026
-**Objectif :** serveur WebSocket self-hosted, compatible protocole Pusher, framework-agnostique, distribué en binaire unique. Package Composer d'intégration Laravel en premier adaptateur.
-
----
-
-## 1. Vision et principes directeurs
-
-### 1.1 Le problème
-Les développeurs PHP qui veulent du temps réel performant doivent choisir entre : un SaaS payant (Pusher, Ably), un serveur PHP qui sature tôt (Reverb ~1000 connexions à 95% CPU sur petit serveur), ou une solution Node (Soketi) qui impose un runtime supplémentaire. Il n'existe pas de serveur temps réel **compilé, zéro dépendance, pensé pour tout PHP** (Laravel, Symfony, WordPress, vanilla).
-
-### 1.2 Les trois promesses (dans l'ordre)
-1. **Compatibilité maximale** — protocole Pusher intégral. Tout client Pusher existant (Laravel Echo, pusher-js, pusher-php-server, clients mobiles) fonctionne sans modification.
-2. **Performance sous charge** — densité de connexions par CPU maximale, latence stable quand ça monte. C'est le gain réel vs PHP/Node ; la latence à vide est équivalente partout.
-3. **Installation triviale** — un binaire statique, zéro Redis, zéro Node, zéro runtime. `./resonance start` et c'est parti.
-
-### 1.3 Anti-objectifs (v0/v1)
-- Pas de scaling horizontal multi-instances en v0 (une instance verticale bien exploitée couvre déjà des dizaines de milliers de connexions).
-- Pas de protocole propriétaire maison — Pusher-compat ou rien.
-- Pas d'UI d'admin en v0 (endpoint métriques texte suffit).
+**Working code name:** `resonance`
+**Document version:** 0.2 — July 2026
+**Goal:** a self-hosted, Pusher-protocol-compatible, framework-agnostic WebSocket server, distributed as a single binary. A Composer package for Laravel integration as the first adapter.
 
 ---
 
-## 2. Architecture globale
+## 1. Vision and guiding principles
+
+### 1.1 The problem
+PHP developers who want performant real-time features must choose between: a paid SaaS (Pusher, Ably), a PHP server that saturates early (Reverb: ~1,000 connections at 95% CPU on a small server), or a Node solution (Soketi) that imposes an extra runtime. There is no **compiled, zero-dependency real-time server designed for all of PHP** (Laravel, Symfony, WordPress, vanilla).
+
+### 1.2 The three promises (in order)
+1. **Maximum compatibility** — the full Pusher protocol. Every existing Pusher client (Laravel Echo, pusher-js, pusher-php-server, mobile clients) works without modification.
+2. **Performance under load** — maximum connection density per CPU, stable latency as load grows. That's the real gain vs PHP/Node; idle latency is equivalent everywhere.
+3. **Trivial installation** — one static binary, zero Redis, zero Node, zero runtime. `./resonance start` and you're live.
+
+### 1.3 Non-goals (v0/v1)
+- No horizontal multi-instance scaling in v0 (one well-utilized vertical instance already covers tens of thousands of connections).
+- No home-grown proprietary protocol — Pusher-compatible or nothing.
+- No admin UI in v0 (a text metrics endpoint is enough).
+
+---
+
+## 2. Overall architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Repo 1 : resonance (Rust)                                   │
-│  Le serveur. Binaire unique, protocole Pusher, HTTP API.     │
+│  Repo 1: resonance (Rust)                                    │
+│  The server. Single binary, Pusher protocol, HTTP API.       │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
-│  Repo 2 : resonance-laravel (PHP)                            │
-│  Package Composer : broadcast driver, config, commande       │
-│  artisan, auth des canaux. Fin — la logique est dans le cœur.│
+│  Repo 2: resonance-laravel (PHP)                             │
+│  Composer package: broadcast driver, config, artisan         │
+│  command, channel auth. Thin — the logic lives in the core.  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Flux runtime :**
+**Runtime flow:**
 
 ```
-Navigateur (Echo/pusher-js)
-    │  WSS (protocole Pusher, port 8080)
+Browser (Echo/pusher-js)
+    │  WSS (Pusher protocol, port 8080)
     ▼
-Serveur resonance (Rust) ◄──── POST /apps/{app_id}/events (HTTP, signé)
+resonance server (Rust) ◄──── POST /apps/{app_id}/events (HTTP, signed)
     │                              ▲
-    │  auth canaux privés          │
+    │  private channel auth        │
     ▼                              │
-App PHP  ───────────────────────────┘
-(endpoint /broadcasting/auth)   (pusher-php-server ou package)
+PHP app ───────────────────────────┘
+(/broadcasting/auth endpoint)   (pusher-php-server or the package)
 ```
 
-Trois canaux de communication, tous au format Pusher :
-1. **Client ↔ serveur** : WebSocket, protocole Pusher (subscribe, events, ping/pong).
-2. **App PHP → serveur** : HTTP REST `POST /apps/{app_id}/events`, signature HMAC — c'est l'API que `pusher-php-server` parle déjà.
-3. **Serveur → app PHP** : requête d'auth des canaux privés/presence (le client fournit la signature obtenue de l'app), et webhooks optionnels (v1).
+Three communication channels, all in Pusher format:
+1. **Client ↔ server**: WebSocket, Pusher protocol (subscribe, events, ping/pong).
+2. **PHP app → server**: HTTP REST `POST /apps/{app_id}/events`, HMAC signature — the API `pusher-php-server` already speaks.
+3. **Server → PHP app**: private/presence channel auth requests (the client supplies the signature obtained from the app), and optional webhooks (v1).
 
 ---
 
-## 3. Cœur Rust — stack technique
+## 3. Rust core — technical stack
 
-### 3.1 Dépendances (Cargo.toml)
+### 3.1 Dependencies (Cargo.toml)
 
-| Crate | Rôle | Justification |
+| Crate | Role | Rationale |
 |---|---|---|
-| `tokio` (full) | Runtime async | Standard de facto, scheduler work-stealing multi-thread |
-| `axum` | HTTP + upgrade WebSocket | Intégration Tokio native, extraction typée, plus simple qu'Actix pour un résultat quasi identique |
-| `tokio-tungstenite` / `axum::extract::ws` | WebSocket | Fourni par axum, basé tungstenite |
-| `dashmap` | État concurrent | HashMap shardée lock-free en lecture, évite un Mutex global |
-| `serde` + `serde_json` | Sérialisation | Messages Pusher = JSON |
-| `hmac` + `sha2` | Signatures | Auth API REST + canaux privés (HMAC-SHA256) |
-| `tracing` + `tracing-subscriber` | Logs structurés | Observabilité sans coût quand désactivé |
+| `tokio` (full) | Async runtime | De-facto standard, multi-threaded work-stealing scheduler |
+| `axum` | HTTP + WebSocket upgrade | Native Tokio integration, typed extraction, simpler than Actix for a near-identical result |
+| `tokio-tungstenite` / `axum::extract::ws` | WebSocket | Provided by axum, built on tungstenite |
+| `dashmap` | Concurrent state | Sharded HashMap, lock-free reads, avoids a global Mutex |
+| `serde` + `serde_json` | Serialization | Pusher messages = JSON |
+| `hmac` + `sha2` | Signatures | REST API auth + private channels (HMAC-SHA256) |
+| `tracing` + `tracing-subscriber` | Structured logs | Observability with zero cost when disabled |
 | `clap` | CLI | `resonance start --config ...` |
-| `toml` | Config fichier | Lisible, standard |
-| `rustls` + `tokio-rustls` | TLS natif | Pas d'OpenSSL — binaire statique portable |
+| `toml` | Config file | Readable, standard |
+| `rustls` + `tokio-rustls` | Native TLS | No OpenSSL — portable static binary |
 
-**Interdits :** pas de `openssl` (casse le build statique), pas de dépendance C (cgo-like), pas de Redis en v0.
+**Forbidden:** no `openssl` (breaks static builds), no C dependencies, no Redis in v0.
 
-### 3.2 Modèle de concurrence
+### 3.2 Concurrency model
 
 ```
 main
- └── Runtime Tokio multi-thread (workers = nb de cœurs)
-      ├── Listener WS (axum) ── 1 task Tokio PAR connexion
-      ├── Listener HTTP API (même serveur axum, routes séparées)
-      └── Task périodique : ping/pong, éviction connexions mortes
+ └── Multi-threaded Tokio runtime (workers = CPU cores)
+      ├── WS listener (axum) ── 1 Tokio task PER connection
+      ├── HTTP API listener (same axum server, separate routes)
+      └── Periodic task: ping/pong, dead-connection eviction
 ```
 
-**Règle d'or : une connexion = une task Tokio + un canal mpsc sortant.**
-Chaque connexion possède :
-- Une task de lecture (messages entrants du client : subscribe, unsubscribe, ping, client events).
-- Un `tokio::sync::mpsc::Sender<Message>` pour l'écriture. Toute écriture vers ce client passe par ce canal ; une task d'écriture unique draine le canal vers la socket. **Jamais d'écriture directe multi-task sur la socket** (source classique de corruption de trames).
+**Golden rule: one connection = one Tokio task + one outbound mpsc channel.**
+Each connection owns:
+- A read task (inbound client messages: subscribe, unsubscribe, ping, client events).
+- A `tokio::sync::mpsc::Sender<Message>` for writes. Every write to this client goes through that channel; a single writer task drains the channel into the socket. **Never multi-task direct writes to the socket** (the classic source of frame corruption).
 
-### 3.3 Structures d'état (le cœur de la performance)
+### 3.3 State structures (the heart of performance)
 
 ```rust
 struct AppState {
-    // app_id -> App (clé, secret, limites)
+    // app_id -> App (key, secret, limits)
     apps: DashMap<AppId, App>,
-    // socket_id -> handle de connexion (sender mpsc + métadonnées)
+    // socket_id -> connection handle (mpsc sender + metadata)
     connections: DashMap<SocketId, ConnectionHandle>,
-    // (app_id, channel_name) -> ensemble des socket_id abonnés
+    // (app_id, channel_name) -> set of subscribed socket_ids
     channels: DashMap<(AppId, ChannelName), ChannelState>,
 }
 
 struct ChannelState {
     subscribers: HashSet<SocketId>,
-    // Pour presence channels uniquement :
+    // Presence channels only:
     presence: Option<HashMap<SocketId, PresenceMember>>,
 }
 ```
 
-Points critiques :
-- `DashMap` shardé → les broadcasts sur des canaux différents ne se contendent pas.
-- `ChannelState` derrière un shard : le fan-out d'un event verrouille **un seul shard**, brièvement, pour cloner la liste des sockets, puis relâche AVANT d'envoyer. On n'envoie jamais sous verrou.
-- `SocketId` : format Pusher `{u64}.{u64}` généré aléatoirement.
+Critical points:
+- Sharded `DashMap` → broadcasts on different channels don't contend.
+- `ChannelState` behind a shard: fanning out an event locks **a single shard**, briefly, to clone the socket list, then releases BEFORE sending. Never send while holding a lock.
+- `SocketId`: Pusher format `{u64}.{u64}`, randomly generated.
 
-### 3.4 Chemin chaud du broadcast (à optimiser en priorité)
+### 3.4 Broadcast hot path (optimize first)
 
 ```
-POST /apps/{id}/events  (depuis PHP)
-  1. Vérifier signature HMAC (rejet précoce, avant tout parsing coûteux)
-  2. Parser le body JSON une seule fois
-  3. PRÉ-SÉRIALISER le message sortant UNE FOIS → Arc<str> / Bytes
-  4. Pour chaque canal cible :
-     a. Lire ChannelState, cloner la Vec<Sender> (verrou très court)
-     b. Pour chaque sender : try_send(message.clone())  // clone d'Arc = pas de copie
-  5. Répondre 200 immédiatement (fire-and-forget vers les clients)
+POST /apps/{id}/events  (from PHP)
+  1. Verify HMAC signature (early rejection, before any costly parsing)
+  2. Parse the JSON body once
+  3. PRE-SERIALIZE the outbound message ONCE → Arc<str> / Bytes
+  4. For each target channel:
+     a. Read ChannelState, clone the Vec<Sender> (very short lock)
+     b. For each sender: try_send(message.clone())  // Arc clone = no copy
+  5. Reply 200 immediately (fire-and-forget toward clients)
 ```
 
-**Optimisations non négociables du chemin chaud :**
-- Le payload sortant est sérialisé **une seule fois** et partagé par `Arc`/`Bytes` — jamais N sérialisations pour N destinataires. À 10k abonnés, c'est LA différence.
-- `try_send` (non bloquant) avec canal borné (ex. 64 messages). Si le buffer d'un client est plein → client trop lent → on le déconnecte (politique "slow consumer kill", comme les brokers sérieux). Un client lent ne doit jamais ralentir les autres.
-- `TCP_NODELAY` activé sur toutes les sockets (latence > throughput pour du temps réel).
-- Pas d'allocation dans la boucle de fan-out.
+**Non-negotiable hot-path optimizations:**
+- The outbound payload is serialized **once** and shared via `Arc`/`Bytes` — never N serializations for N recipients. At 10k subscribers, this is THE difference.
+- `try_send` (non-blocking) with a bounded channel (e.g. 64 messages). If a client's buffer is full → client too slow → disconnect it ("slow consumer kill" policy, like serious brokers). A slow client must never slow the others down.
+- `TCP_NODELAY` enabled on all sockets (latency > throughput for real-time).
+- No allocation inside the fan-out loop.
 
-### 3.5 Limites et protections (dès la v0)
-- Taille max de message client : 10 Ko (défaut Pusher), configurable.
-- Nombre max de canaux par connexion : configurable (défaut 100).
-- Rate limit sur les client events (`client-*`) : défaut Pusher ~10/s par connexion.
-- Timeout d'activité : ping toutes les 120s (défaut protocole Pusher `activity_timeout`), fermeture si pas de pong sous 30s.
-- Backpressure : canal mpsc borné par connexion (voir 3.4).
+### 3.5 Limits and protections (from v0)
+- Max client message size: 10 KB (Pusher default), configurable.
+- Max channels per connection: configurable (default 100).
+- Rate limit on client events (`client-*`): Pusher default ~10/s per connection.
+- Activity timeout: ping every 120 s (Pusher protocol default `activity_timeout`), close if no pong within 30 s.
+- Backpressure: bounded per-connection mpsc channel (see 3.4).
 
 ---
 
-## 4. Compatibilité protocole Pusher — la checklist intégrale
+## 4. Pusher protocol compatibility — the complete checklist
 
-C'est la section la plus importante pour la promesse n°1. La compatibilité se joue dans les détails. Référence : Pusher Channels Protocol v7.
+This is the most important section for promise #1. Compatibility lives in the details. Reference: Pusher Channels Protocol v7.
 
-### 4.1 Handshake WebSocket
-- URL : `ws(s)://host:port/app/{key}?protocol=7&client=...&version=...`
-- À la connexion, envoyer immédiatement :
+### 4.1 WebSocket handshake
+- URL: `ws(s)://host:port/app/{key}?protocol=7&client=...&version=...`
+- On connection, immediately send:
 ```json
 {"event":"pusher:connection_established","data":"{\"socket_id\":\"123.456\",\"activity_timeout\":120}"}
 ```
-- **Piège de compat n°1 :** le champ `data` est une **chaîne JSON encodée**, pas un objet JSON. Tous les events Pusher font ça (double encodage). Les clients cassent silencieusement si tu envoies un objet.
+- **Compat trap #1:** the `data` field is a **JSON-encoded string**, not a JSON object. Every Pusher event does this (double encoding). Clients break silently if you send an object.
 
-### 4.2 Événements protocole à implémenter
+### 4.2 Protocol events to implement
 
-| Événement | Direction | Notes |
+| Event | Direction | Notes |
 |---|---|---|
-| `pusher:connection_established` | S→C | Au handshake |
-| `pusher:subscribe` | C→S | Avec `channel`, et `auth` + `channel_data` pour privé/presence |
+| `pusher:connection_established` | S→C | On handshake |
+| `pusher:subscribe` | C→S | With `channel`, plus `auth` + `channel_data` for private/presence |
 | `pusher:unsubscribe` | C→S | |
-| `pusher_internal:subscription_succeeded` | S→C | Pour presence : contient la liste des membres |
-| `pusher:ping` / `pusher:pong` | Bidirectionnel | Répondre aux deux sens |
-| `pusher:error` | S→C | Avec les codes d'erreur officiels (4000-4299) |
+| `pusher_internal:subscription_succeeded` | S→C | For presence: contains the member list |
+| `pusher:ping` / `pusher:pong` | Bidirectional | Answer in both directions |
+| `pusher:error` | S→C | With the official error codes (4000-4299) |
 | `pusher_internal:member_added` / `member_removed` | S→C | Presence channels |
-| `client-*` (client events) | C→S→C | Uniquement sur canaux privés/presence, jamais renvoyé à l'émetteur, rate-limité |
+| `client-*` (client events) | C→S→C | Private/presence channels only, never echoed to the sender, rate-limited |
 
-### 4.3 Types de canaux
+### 4.3 Channel types
 
-| Type | Préfixe | Auth requise | Spécificités |
+| Type | Prefix | Auth required | Specifics |
 |---|---|---|---|
-| Public | (aucun) | Non | Subscribe direct |
-| Privé | `private-` | Oui | Signature HMAC vérifiée au subscribe |
-| Privé chiffré | `private-encrypted-` | Oui | v1+ (chiffrement côté client, le serveur relaie) |
-| Presence | `presence-` | Oui | `channel_data` = user_id + user_info ; diffuser member_added/removed ; renvoyer la liste au subscribe |
+| Public | (none) | No | Direct subscribe |
+| Private | `private-` | Yes | HMAC signature verified at subscribe |
+| Private encrypted | `private-encrypted-` | Yes | v1+ (client-side encryption, server relays) |
+| Presence | `presence-` | Yes | `channel_data` = user_id + user_info; broadcast member_added/removed; return the member list at subscribe |
 
-### 4.4 Signature d'auth des canaux privés (le détail qui casse tout)
-Le client obtient la signature depuis l'app PHP (`/broadcasting/auth` en Laravel). Le serveur doit **vérifier** :
+### 4.4 Private channel auth signature (the detail that breaks everything)
+The client obtains the signature from the PHP app (`/broadcasting/auth` in Laravel). The server must **verify**:
 ```
 signature = HMAC-SHA256(secret, socket_id + ":" + channel_name)
-// presence : socket_id + ":" + channel_name + ":" + channel_data
+// presence: socket_id + ":" + channel_name + ":" + channel_data
 auth = "{key}:{hex(signature)}"
 ```
-Comparaison en temps constant (`subtle` ou équivalent) pour éviter les timing attacks.
+Constant-time comparison (`subtle` or equivalent) to prevent timing attacks.
 
-### 4.5 API REST HTTP (ce que pusher-php-server appelle)
+### 4.5 HTTP REST API (what pusher-php-server calls)
 
-| Endpoint | Méthode | Rôle |
+| Endpoint | Method | Role |
 |---|---|---|
-| `/apps/{app_id}/events` | POST | Publier un event (LE endpoint critique) |
-| `/apps/{app_id}/batch_events` | POST | Publier en lot (v1) |
-| `/apps/{app_id}/channels` | GET | Lister les canaux occupés (v1) |
-| `/apps/{app_id}/channels/{name}` | GET | Info d'un canal (v1) |
-| `/apps/{app_id}/channels/{name}/users` | GET | Membres presence (v1) |
+| `/apps/{app_id}/events` | POST | Publish an event (THE critical endpoint) |
+| `/apps/{app_id}/batch_events` | POST | Publish in batch (v1) |
+| `/apps/{app_id}/channels` | GET | List occupied channels (v1) |
+| `/apps/{app_id}/channels/{name}` | GET | Info on one channel (v1) |
+| `/apps/{app_id}/channels/{name}/users` | GET | Presence members (v1) |
 
-**Signature des requêtes REST (Pusher auth scheme) :**
+**REST request signing (Pusher auth scheme):**
 ```
-string_to_sign = "POST\n/apps/{app_id}/events\n" + query_string_triée
+string_to_sign = "POST\n/apps/{app_id}/events\n" + sorted_query_string
 auth_signature = HMAC-SHA256(secret, string_to_sign)
 ```
-Query string : `auth_key`, `auth_timestamp` (tolérance ±600s), `auth_version=1.0`, `body_md5` (MD5 du body), paramètres triés alphabétiquement. Implémenter **exactement** ce schéma — c'est ce que `pusher-php-server` génère. Tester contre la lib officielle, pas contre ta propre implémentation.
+Query string: `auth_key`, `auth_timestamp` (±600 s tolerance), `auth_version=1.0`, `body_md5` (MD5 of the body), parameters sorted alphabetically. Implement **exactly** this scheme — it's what `pusher-php-server` generates. Test against the official library, not your own implementation.
 
-### 4.6 Matrice de compatibilité à valider (tests d'intégration)
+### 4.6 Compatibility matrix to validate (integration tests)
 
 | Client | Test |
 |---|---|
-| `pusher-js` (navigateur) | Connexion, subscribe public/privé/presence, réception d'events, client events |
-| **Laravel Echo** (wrapper pusher-js) | `Echo.channel()`, `Echo.private()`, `Echo.join()` (presence), whisper |
-| `pusher-php-server` | `trigger()`, `triggerBatch()`, auth de canaux |
-| Laravel `broadcast()` + driver pusher | Le flux complet Laravel sans le package dédié |
-| Reconnexion automatique | Couper la socket, vérifier resubscribe automatique du client |
+| `pusher-js` (browser) | Connect, subscribe public/private/presence, receive events, client events |
+| **Laravel Echo** (pusher-js wrapper) | `Echo.channel()`, `Echo.private()`, `Echo.join()` (presence), whisper |
+| `pusher-php-server` | `trigger()`, `triggerBatch()`, channel auth |
+| Laravel `broadcast()` + pusher driver | The full Laravel flow without the dedicated package |
+| Automatic reconnection | Cut the socket, verify the client resubscribes automatically |
 
-**Critère de done de la v0 : une app Laravel existante utilisant Reverb bascule vers resonance en changeant UNIQUEMENT les variables d'env (host/port/key/secret). Zéro changement de code.**
+**v0 definition of done: an existing Laravel app using Reverb switches to resonance by changing ONLY environment variables (host/port/key/secret). Zero code changes.**
 
-### 4.7 Réseau et déploiement (compat infra)
-- TLS natif (rustls) OU terminaison TLS au reverse proxy — supporter les deux.
-- Fonctionner derrière nginx/Caddy/Traefik : documenter la config d'upgrade WebSocket (`proxy_set_header Upgrade/Connection`).
-- Écouter sur un port unique pour WS + API HTTP (routes distinctes) : simplifie firewall et proxy.
+### 4.7 Network and deployment (infra compat)
+- Native TLS (rustls) OR TLS termination at the reverse proxy — support both.
+- Work behind nginx/Caddy/Traefik: document the WebSocket upgrade config (`proxy_set_header Upgrade/Connection`).
+- Listen on a single port for WS + HTTP API (separate routes): simplifies firewall and proxy.
 - IPv4 + IPv6.
-- Header `X-Forwarded-For` pour les logs derrière proxy.
+- `X-Forwarded-For` header for logs behind a proxy.
 
 ---
 
-## 5. Performance — objectifs chiffrés et méthode
+## 5. Performance — numeric targets and method
 
-### 5.1 Cibles v0 (sur une machine 2 vCPU / 4 Go type t3.medium)
+### 5.1 v0 targets (on a 2 vCPU / 4 GB machine, t3.medium class)
 
-| Métrique | Cible | Référence concurrente |
+| Metric | Target | Competitor reference |
 |---|---|---|
-| Connexions simultanées idle | ≥ 50 000 | Reverb : ~20k rapporté sur t3.medium |
-| CPU à 1 000 connexions actives | < 10% | Reverb : ~95% sur serveur 5$ ; Go : ~18% |
-| Latence p99 broadcast (1 canal, 1k abonnés) | < 10 ms intra-DC | |
-| Mémoire par connexion idle | < 20 Ko | |
-| Throughput events entrants (API REST) | ≥ 5 000 req/s | |
+| Simultaneous idle connections | ≥ 50,000 | Reverb: ~20k reported on t3.medium |
+| CPU at 1,000 active connections | < 10% | Reverb: ~95% on a $5 server; Go: ~18% |
+| p99 broadcast latency (1 channel, 1k subscribers) | < 10 ms intra-DC | |
+| Memory per idle connection | < 20 KB | |
+| Inbound event throughput (REST API) | ≥ 5,000 req/s | |
 
-### 5.2 Réglages système à documenter (sinon les benchs mentent)
-- `ulimit -n` (file descriptors) ≥ 2× connexions visées.
-- `net.core.somaxconn`, `net.ipv4.tcp_tw_reuse` selon charge.
-- Le binaire doit afficher un avertissement au démarrage si `ulimit` est trop bas.
+### 5.2 System tuning to document (otherwise benchmarks lie)
+- `ulimit -n` (file descriptors) ≥ 2× target connections.
+- `net.core.somaxconn`, `net.ipv4.tcp_tw_reuse` depending on load.
+- The binary must print a warning at startup if `ulimit` is too low.
 
-### 5.3 Méthodologie de benchmark (livrable public)
-- Outil : k6 (scénario WS) ou un bencher Rust custom publié dans le repo.
-- Scénarios : (a) ramp 0→N connexions idle, (b) 1k connexions + broadcast 100 msg/s sur canal partagé, (c) fan-out extrême : 1 event → 10k abonnés, mesurer p50/p99 de livraison.
-- Comparer sur le **même hardware, même scénario** : resonance vs Reverb vs Soketi. Publier scripts + résultats bruts dans `bench/`. La reproductibilité est l'argument de crédibilité.
-- Ne jamais publier de chiffre non reproductible par un tiers.
+### 5.3 Benchmark methodology (public deliverable)
+- Tool: k6 (WS scenario) or a custom Rust bencher published in the repo.
+- Scenarios: (a) ramp 0→N idle connections, (b) 1k connections + 100 msg/s broadcast on a shared channel, (c) extreme fan-out: 1 event → 10k subscribers, measure p50/p99 delivery.
+- Compare on the **same hardware, same scenario**: resonance vs Reverb vs Soketi. Publish scripts + raw results in `bench/`. Reproducibility is the credibility argument.
+- Never publish a number a third party cannot reproduce.
 
-### 5.4 Pièges de perf à éviter (revue de code systématique)
-- Sérialiser N fois le même payload (voir 3.4) — le tueur silencieux.
-- Envoyer sous verrou DashMap.
-- `send().await` bloquant sur un client lent au milieu d'un fan-out — toujours `try_send`.
-- Logs en niveau debug dans le chemin chaud (tracing avec filtres compilés).
-- Allocations dans la boucle de fan-out (profiler avec `cargo flamegraph`).
+### 5.4 Performance traps to avoid (systematic code review)
+- Serializing the same payload N times (see 3.4) — the silent killer.
+- Sending while holding a DashMap lock.
+- A blocking `send().await` on a slow client mid-fan-out — always `try_send`.
+- Debug-level logs in the hot path (tracing with compile-time filters).
+- Allocations in the fan-out loop (profile with `cargo flamegraph`).
 
 ---
 
-## 6. Package Composer `resonance-laravel`
+## 6. Composer package `resonance-laravel`
 
-### 6.1 Principe : le package le plus fin possible
-Comme le serveur est Pusher-compatible, Laravel sait DÉJÀ lui parler via le driver `pusher` existant (config host/port custom). Le package apporte le confort, pas la plomberie :
+### 6.1 Principle: the thinnest possible package
+Since the server is Pusher-compatible, Laravel ALREADY knows how to talk to it via the existing `pusher` driver (custom host/port config). The package adds comfort, not plumbing:
 
 ```
 resonance-laravel/
-├── composer.json          # require: php ^8.2, laravel ^11|^12 ; suggest rien — zéro extension
+├── composer.json          # require: php ^8.2, laravel ^11|^12; suggests nothing — zero extensions
 ├── config/resonance.php   # host, port, app_id, key, secret, TLS
 ├── src/
-│   ├── ResonanceServiceProvider.php   # merge config, enregistre le driver
-│   ├── ResonanceBroadcaster.php       # étend PusherBroadcaster (réutilise, ne réécrit pas)
+│   ├── ResonanceServiceProvider.php   # merges config, registers the driver
+│   ├── ResonanceBroadcaster.php       # extends PusherBroadcaster (reuse, don't rewrite)
 │   └── Console/
-│       ├── InstallCommand.php         # télécharge le binaire de la release GitHub
-│       │                              #   selon OS/arch, le place dans ./bin, chmod +x
-│       └── StartCommand.php           # php artisan resonance:start (lance le binaire)
+│       ├── InstallCommand.php         # downloads the binary from the GitHub release
+│       │                              #   by OS/arch, drops it in ./bin, chmod +x
+│       └── StartCommand.php           # php artisan resonance:start (runs the binary)
 └── tests/
 ```
 
-### 6.2 Décisions
-- **Pas d'extension PHP, pas de FFI** — inutiles ici, tout passe par réseau. Le package reste du PHP pur → installable partout, aucun frein d'adoption.
-- `InstallCommand` détecte OS + architecture (`php_uname`) et télécharge le bon binaire depuis GitHub Releases avec vérification de checksum SHA-256. C'est l'équivalent DX de `php artisan reverb:start`.
-- Réutiliser `PusherBroadcaster` de Laravel au lieu de réécrire : moins de code, compat garantie avec les évolutions du framework.
-- Versionner la compat : matrice PHP 8.2/8.3/8.4 × Laravel 11/12 en CI.
+### 6.2 Decisions
+- **No PHP extension, no FFI** — pointless here, everything goes over the network. The package stays pure PHP → installable everywhere, zero adoption friction.
+- `InstallCommand` detects OS + architecture (`php_uname`) and downloads the right binary from GitHub Releases with SHA-256 checksum verification. It's the DX equivalent of `php artisan reverb:start`.
+- Reuse Laravel's `PusherBroadcaster` instead of rewriting: less code, guaranteed compat with framework evolution.
+- Version the compat: PHP 8.2/8.3/8.4 × Laravel 11/12 matrix in CI.
 
-### 6.3 Adaptateurs futurs (v2+, seulement si traction)
-- Bundle Symfony (Mercure est SSE ; positionner sur le bidirectionnel).
-- Client PHP générique = documentation d'usage de `pusher-php-server` pointé vers resonance (quasi zéro code).
-- Plugin WordPress si demande.
+### 6.3 Future adapters (v2+, only if traction)
+- Symfony bundle (Mercure is SSE; position on bidirectional).
+- Generic PHP client = usage documentation for `pusher-php-server` pointed at resonance (near-zero code).
+- WordPress plugin if demand exists.
 
 ---
 
-## 7. Distribution du binaire
+## 7. Binary distribution
 
-### 7.1 Cibles de compilation (CI GitHub Actions)
+### 7.1 Compilation targets (GitHub Actions CI)
 
-| Cible | Priorité |
+| Target | Priority |
 |---|---|
-| `x86_64-unknown-linux-musl` (statique) | P0 — le serveur type |
-| `aarch64-unknown-linux-musl` | P0 — ARM (Graviton, Ampère, Raspberry) |
-| `x86_64-apple-darwin` + `aarch64-apple-darwin` | P1 — dev local |
-| `x86_64-pc-windows-msvc` | P2 — dev local Windows |
+| `x86_64-unknown-linux-musl` (static) | P0 — the typical server |
+| `aarch64-unknown-linux-musl` | P0 — ARM (Graviton, Ampere, Raspberry) |
+| `x86_64-apple-darwin` + `aarch64-apple-darwin` | P1 — local dev |
+| `x86_64-pc-windows-msvc` | P2 — local Windows dev |
 
-**musl + rustls = binaire 100% statique**, aucun `.so` requis, tourne sur n'importe quelle distro et dans une image Docker `scratch`.
+**musl + rustls = 100% static binary**, no `.so` required, runs on any distro and in a `scratch` Docker image.
 
-### 7.2 Canaux de distribution
-1. GitHub Releases (binaires + checksums) — source de vérité.
-2. Image Docker officielle (`FROM scratch`, ~10 Mo) sur ghcr.io.
-3. `php artisan resonance:install` (voir 6.2).
-4. Plus tard : Homebrew tap, AUR.
+### 7.2 Distribution channels
+1. GitHub Releases (binaries + checksums) — source of truth.
+2. Official Docker image (`FROM scratch`, ~10 MB) on ghcr.io.
+3. `php artisan resonance:install` (see 6.2).
+4. Later: Homebrew tap, AUR.
 
-### 7.3 Config du serveur (fichier TOML + surcharge env)
+### 7.3 Server config (TOML file + env overrides)
 ```toml
 [server]
 host = "0.0.0.0"
 port = 8080
 
-[tls]                    # optionnel — sinon terminer au proxy
+[tls]                    # optional — otherwise terminate at the proxy
 cert = "/path/cert.pem"
 key = "/path/key.pem"
 
@@ -322,69 +322,69 @@ key = "/path/key.pem"
 id = "app1"
 key = "resonance-key"
 secret = "resonance-secret"
-max_connections = 0      # 0 = illimité
+max_connections = 0      # 0 = unlimited
 enable_client_events = true
 
 [limits]
 max_message_size_kb = 10
 activity_timeout_s = 120
 ```
-Toute valeur surchargeable par variable d'env (`RESONANCE_PORT=...`) — indispensable pour Docker.
+Every value overridable via environment variable (`RESONANCE_PORT=...`) — essential for Docker.
 
 ---
 
-## 8. Sécurité (checklist v0)
-- Comparaisons HMAC en temps constant partout.
-- `auth_timestamp` REST : rejeter au-delà de ±600 s (anti-replay).
-- Secrets jamais loggés, jamais dans les messages d'erreur.
-- Origins autorisées configurables (CORS de l'upgrade WS) — vide = tout accepter (dev), à restreindre en prod, documenté.
-- Fuzzing basique du parser de trames (cargo-fuzz) avant la v1.
-- Pas de `unsafe` dans le code applicatif (autorisé uniquement via dépendances auditées).
+## 8. Security (v0 checklist)
+- Constant-time HMAC comparisons everywhere.
+- REST `auth_timestamp`: reject beyond ±600 s (anti-replay).
+- Secrets never logged, never in error messages.
+- Configurable allowed origins (CORS of the WS upgrade) — empty = accept all (dev), restrict in prod, documented.
+- Basic fuzzing of the frame parser (cargo-fuzz) before v1.
+- No `unsafe` in application code (allowed only via audited dependencies).
 
 ---
 
-## 9. Tests
+## 9. Testing
 
-| Niveau | Outil | Couvre |
+| Level | Tool | Covers |
 |---|---|---|
-| Unitaires Rust | `cargo test` | Signatures, parsing protocole, state channels |
-| Intégration protocole | Tests Rust lançant le serveur + client `tungstenite` | Handshake, subscribe, fan-out, presence, erreurs |
-| **Compat clients réels** | Docker Compose : serveur + PHP (pusher-php-server) + Node (pusher-js headless) | La matrice 4.6 — c'est LE filet de sécurité |
-| Charge | k6 / bencher custom | Les cibles 5.1, en CI hebdo (pas à chaque commit) |
-| Package PHP | Pest/PHPUnit + orchestra/testbench | Driver, commandes, matrice Laravel |
+| Rust unit tests | `cargo test` | Signatures, protocol parsing, channel state |
+| Protocol integration | Rust tests launching the server + `tungstenite` client | Handshake, subscribe, fan-out, presence, errors |
+| **Real client compat** | Docker Compose: server + PHP (pusher-php-server) + Node (headless pusher-js) | The 4.6 matrix — THE safety net |
+| Load | k6 / custom bencher | The 5.1 targets, weekly CI (not per-commit) |
+| PHP package | Pest/PHPUnit + orchestra/testbench | Driver, commands, Laravel matrix |
 
 ---
 
 ## 10. Roadmap
 
-### v0 — « Reverb drop-in » (objectif : 4-6 semaines de soirées)
-- Canaux publics + privés, events REST, ping/pong, erreurs protocole.
-- Une instance, état mémoire, config TOML, TLS rustls.
-- Package Laravel : provider + install + start.
-- Test de bascule : app Reverb → resonance par variables d'env uniquement.
-- Benchmark publié vs Reverb.
+### v0 — "Reverb drop-in" (goal: 4-6 weeks of evenings)
+- Public + private channels, REST events, ping/pong, protocol errors.
+- Single instance, in-memory state, TOML config, rustls TLS.
+- Laravel package: provider + install + start.
+- Switch test: Reverb app → resonance via environment variables only.
+- Published benchmark vs Reverb.
 
-### v1 — « Production-ready »
-- Presence channels complets, client events rate-limités, batch events.
-- Endpoints d'inspection (channels, users), métriques Prometheus (`/metrics`).
+### v1 — "Production-ready"
+- Full presence channels, rate-limited client events, batch events.
+- Inspection endpoints (channels, users), Prometheus metrics (`/metrics`).
 - Webhooks (channel_occupied/vacated, member_added/removed).
-- Fuzzing, docs de déploiement (nginx, systemd, Docker), benchmark vs Soketi.
+- Fuzzing, deployment docs (nginx, systemd, Docker), benchmark vs Soketi.
 
-### v2 — selon traction uniquement
-- Scaling horizontal (NATS ou Redis pub/sub en option, jamais requis).
-- Canaux chiffrés (`private-encrypted-`).
-- Bundle Symfony.
+### v2 — traction-dependent only
+- Horizontal scaling (optional NATS or Redis pub/sub, never required).
+- Encrypted channels (`private-encrypted-`).
+- Symfony bundle.
 
 ---
 
-## 11. Décisions actées (ADR courts)
+## 11. Recorded decisions (short ADRs)
 
-| # | Décision | Raison |
+| # | Decision | Reason |
 |---|---|---|
-| 1 | Axum plutôt qu'Actix Web | Intégration Tokio native, API plus simple, perf équivalente en pratique ; Actix n'apporte rien de décisif ici |
-| 2 | Protocole Pusher, pas de protocole maison | Compat immédiate avec tout l'écosystème (Echo, libs PHP/JS/mobiles) — c'est la promesse n°1 |
-| 3 | Pas d'extension PHP / FFI | Un serveur long-running ne rentre pas dans le modèle d'exécution PHP ; le réseau est la seule frontière saine |
-| 4 | Pas de Redis en v0 | Zéro dépendance = argument d'adoption ; une instance couvre déjà la cible |
-| 5 | musl + rustls | Binaire statique universel, image Docker scratch |
-| 6 | Package = surcouche du driver pusher Laravel | Réutiliser > réécrire ; compat garantie |
-| 7 | Slow-consumer kill (buffer borné + try_send) | Un client lent ne doit jamais dégrader les autres — condition de la latence stable sous charge |
+| 1 | Axum over Actix Web | Native Tokio integration, simpler API, equivalent perf in practice; Actix brings nothing decisive here |
+| 2 | Pusher protocol, no custom protocol | Immediate compat with the whole ecosystem (Echo, PHP/JS/mobile libs) — promise #1 |
+| 3 | No PHP extension / FFI | A long-running server doesn't fit PHP's execution model; the network is the only sane boundary |
+| 4 | No Redis in v0 | Zero dependencies = adoption argument; one instance already covers the target |
+| 5 | musl + rustls | Universal static binary, scratch Docker image |
+| 6 | Package = thin layer over Laravel's pusher driver | Reuse > rewrite; guaranteed compat |
+| 7 | Slow-consumer kill (bounded buffer + try_send) | A slow client must never degrade the others — the condition for stable latency under load |

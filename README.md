@@ -165,7 +165,7 @@ qa/laravel/run.sh                            # real Laravel app broadcast in Doc
 qa/bench/run.sh                              # benchmark vs Reverb, same harness
 ```
 
-Full technical specification: [`project.md`](project.md) (French).
+Full technical specification: [`project.md`](project.md).
 
 ## License
 

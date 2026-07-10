@@ -12,3 +12,6 @@ max_connections = 0        # 0 = unlimited
 max_message_size_kb = 10
 activity_timeout_s = 120
 max_channels_per_connection = 100
+# Browser origins allowed to connect. Empty = allow all (dev only!).
+# Production: allowed_origins = ["https://app.example.com"]
+allowed_origins = []

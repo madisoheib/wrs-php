@@ -23,6 +23,8 @@ pub struct Limits {
     pub max_message_size: usize, // bytes
     pub activity_timeout_s: u64,
     pub max_channels_per_connection: usize,
+    // Browser origins allowed to open WS connections. Empty = allow all (dev).
+    pub allowed_origins: Vec<String>,
 }
 
 pub struct Conn {

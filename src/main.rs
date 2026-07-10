@@ -4,7 +4,7 @@ mod ws;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, State as AxState},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -77,6 +77,8 @@ struct LimitsCfg {
     activity_timeout_s: u64,
     #[serde(default = "default_max_channels")]
     max_channels_per_connection: usize,
+    #[serde(default)]
+    allowed_origins: Vec<String>,
 }
 impl Default for LimitsCfg {
     fn default() -> Self {
@@ -84,6 +86,7 @@ impl Default for LimitsCfg {
             max_message_size_kb: default_msg_kb(),
             activity_timeout_s: default_timeout(),
             max_channels_per_connection: default_max_channels(),
+            allowed_origins: Vec::new(),
         }
     }
 }
@@ -142,10 +145,15 @@ async fn main() {
         .into_iter()
         .map(|a| App { id: a.id, key: a.key, secret: a.secret, max_connections: a.max_connections })
         .collect();
+    // RESONANCE_ALLOWED_ORIGINS="https://a.com,https://b.com" overrides config.
+    if let Ok(v) = std::env::var("RESONANCE_ALLOWED_ORIGINS") {
+        cfg.limits.allowed_origins = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    }
     let limits = Limits {
         max_message_size: cfg.limits.max_message_size_kb * 1024,
         activity_timeout_s: cfg.limits.activity_timeout_s,
         max_channels_per_connection: cfg.limits.max_channels_per_connection,
+        allowed_origins: cfg.limits.allowed_origins,
     };
     let state = State::new(apps, limits);
 
@@ -171,7 +179,18 @@ async fn ws_route(
     ws: WebSocketUpgrade,
     Path(key): Path<String>,
     AxState(state): AxState<Arc<State>>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
+    // Origin allow-list (empty = allow all, for dev). Browsers always send
+    // Origin on WS upgrades; non-browser clients (no Origin) are allowed —
+    // they aren't subject to cross-site attacks and can't be blocked anyway.
+    if !state.limits.allowed_origins.is_empty() {
+        if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+            if !state.limits.allowed_origins.iter().any(|o| o == origin) {
+                return axum::http::StatusCode::FORBIDDEN.into_response();
+            }
+        }
+    }
     let app = state.app_by_key(&key).cloned();
     let max = state.limits.max_message_size;
     // tungstenite defaults to a 128KB read + 128KB write buffer PER connection,

@@ -2,6 +2,11 @@
 host = "0.0.0.0"
 port = 8080
 
+# Native TLS — omit this table to serve plain ws/http (terminate at your proxy).
+# [tls]
+# cert = "/path/fullchain.pem"
+# key = "/path/privkey.pem"
+
 [[apps]]
 id = "app1"
 key = "resonance-key"

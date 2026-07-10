@@ -39,6 +39,13 @@ struct Config {
     apps: Vec<AppCfg>,
     #[serde(default)]
     limits: LimitsCfg,
+    tls: Option<TlsCfg>,
+}
+
+#[derive(Deserialize)]
+struct TlsCfg {
+    cert: String,
+    key: String,
 }
 
 #[derive(Deserialize)]
@@ -193,16 +200,43 @@ async fn main() {
         .with_state(state.clone());
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
-        eprintln!("Cannot bind {addr}: {e}");
-        std::process::exit(1);
-    });
-    // Latency beats throughput for real-time: disable Nagle on every socket.
-    let listener = axum::serve::ListenerExt::tap_io(listener, |io| {
-        let _ = io.set_nodelay(true);
-    });
-    tracing::info!("resonance listening on {addr} ({} app(s))", state.apps.len());
-    axum::serve(listener, app).await.unwrap();
+
+    if let Some(tls) = cfg.tls {
+        // Native TLS (rustls/ring — keeps the musl static build intact).
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("install rustls provider");
+        let rustls_cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Cannot load TLS cert/key ({} / {}): {e}", tls.cert, tls.key);
+                std::process::exit(1);
+            });
+        let sock_addr: std::net::SocketAddr = addr.parse().unwrap_or_else(|e| {
+            eprintln!("Invalid listen address {addr}: {e}");
+            std::process::exit(1);
+        });
+        tracing::info!("resonance listening on {addr} (TLS, {} app(s))", state.apps.len());
+        // Compose: NoDelayAcceptor sets TCP_NODELAY, then rustls handshakes.
+        let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(rustls_cfg)
+            .acceptor(axum_server::accept::NoDelayAcceptor);
+        axum_server::bind(sock_addr)
+            .acceptor(acceptor)
+            .serve(app.into_make_service())
+            .await
+            .unwrap();
+    } else {
+        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
+            eprintln!("Cannot bind {addr}: {e}");
+            std::process::exit(1);
+        });
+        // Latency beats throughput for real-time: disable Nagle on every socket.
+        let listener = axum::serve::ListenerExt::tap_io(listener, |io| {
+            let _ = io.set_nodelay(true);
+        });
+        tracing::info!("resonance listening on {addr} ({} app(s))", state.apps.len());
+        axum::serve(listener, app).await.unwrap();
+    }
 }
 
 /// Drains the webhook queue and POSTs Pusher-format webhooks:

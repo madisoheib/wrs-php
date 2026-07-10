@@ -136,8 +136,8 @@ $pusher->trigger('my-channel', 'my-event', ['hello' => 'world']);
 - Dead-connection eviction (server ping after `activity_timeout`, 30 s grace)
 - Prometheus metrics at `GET /metrics` (connections, channels, events in,
   messages out, slow-consumer kills)
-
-Native TLS (rustls) is on the [roadmap](project.md) — terminate at your proxy meanwhile.
+- Native TLS (rustls): add a `[tls]` table with `cert`/`key` PEM paths to serve
+  `wss://` directly — or omit it and terminate TLS at your proxy
 
 ## Deployment
 

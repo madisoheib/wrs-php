@@ -119,15 +119,19 @@ $pusher->trigger('my-channel', 'my-event', ['hello' => 'world']);
 ## Protocol support
 
 - WebSocket handshake, `pusher:connection_established`, ping/pong, protocol error codes
-- Public and private channels (HMAC auth, constant-time verification)
+- Public, private and **presence** channels (HMAC auth, constant-time verification;
+  member roster, `member_added` / `member_removed` — `Echo.join()` works)
+- **Client events** (`client-*`, Echo `whisper()`): private/presence only,
+  never echoed to the sender, rate-limited per connection (default 10/s)
 - REST `POST /apps/{app_id}/events` with the full Pusher auth scheme
   (`auth_signature`, `auth_timestamp` ±600 s anti-replay, mandatory `body_md5`)
 - Sender exclusion via `socket_id`
+- Origin allow-list for browser connections (`allowed_origins`)
 - Slow-consumer protection: bounded per-connection buffers, non-blocking fan-out,
   laggards are disconnected instead of degrading everyone else
 - Dead-connection eviction (server ping after `activity_timeout`, 30 s grace)
 
-Presence channels, client events and webhooks are on the [roadmap](project.md).
+Webhooks, batch events and channel-inspection endpoints are on the [roadmap](project.md).
 
 ## Deployment
 

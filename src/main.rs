@@ -79,6 +79,8 @@ struct LimitsCfg {
     max_channels_per_connection: usize,
     #[serde(default)]
     allowed_origins: Vec<String>,
+    #[serde(default = "default_client_event_rate")]
+    client_event_rate: u32,
 }
 impl Default for LimitsCfg {
     fn default() -> Self {
@@ -87,10 +89,14 @@ impl Default for LimitsCfg {
             activity_timeout_s: default_timeout(),
             max_channels_per_connection: default_max_channels(),
             allowed_origins: Vec::new(),
+            client_event_rate: default_client_event_rate(),
         }
     }
 }
 fn default_msg_kb() -> usize {
+    10
+}
+fn default_client_event_rate() -> u32 {
     10
 }
 fn default_timeout() -> u64 {
@@ -154,6 +160,7 @@ async fn main() {
         activity_timeout_s: cfg.limits.activity_timeout_s,
         max_channels_per_connection: cfg.limits.max_channels_per_connection,
         allowed_origins: cfg.limits.allowed_origins,
+        client_event_rate: cfg.limits.client_event_rate,
     };
     let state = State::new(apps, limits);
 

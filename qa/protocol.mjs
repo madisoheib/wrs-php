@@ -153,6 +153,76 @@ async function main() {
     if (!killed) throw new Error("slow consumer was not disconnected");
   });
 
+  await step("presence: join roster, member_added, member_removed", async () => {
+    // authorizeChannel with presence data — same as Laravel's /broadcasting/auth
+    const a = client(); const b = client();
+    const ea = await establish(a); const eb = await establish(b);
+    const chName = "presence-room";
+    const authA = server.authorizeChannel(ea.parsed.socket_id, chName, { user_id: "u1", user_info: { name: "Alice" } });
+    const authB = server.authorizeChannel(eb.parsed.socket_id, chName, { user_id: "u2", user_info: { name: "Bob" } });
+
+    a.send({ event: "pusher:subscribe", data: { channel: chName, auth: authA.auth, channel_data: authA.channel_data } });
+    const okA = await a.waitFor((f) => f.event === "pusher_internal:subscription_succeeded" && f.channel === chName, "sub A");
+    if (okA.parsed.presence.count !== 1 || !okA.parsed.presence.ids.includes("u1")) throw new Error(`bad roster A: ${okA.data}`);
+
+    b.send({ event: "pusher:subscribe", data: { channel: chName, auth: authB.auth, channel_data: authB.channel_data } });
+    const okB = await b.waitFor((f) => f.event === "pusher_internal:subscription_succeeded" && f.channel === chName, "sub B");
+    if (okB.parsed.presence.count !== 2) throw new Error(`bad roster B: ${okB.data}`);
+
+    const added = await a.waitFor((f) => f.event === "pusher_internal:member_added", "member_added");
+    if (added.parsed.user_id !== "u2") throw new Error("wrong member_added");
+
+    b.send({ event: "pusher:unsubscribe", data: { channel: chName } });
+    const removed = await a.waitFor((f) => f.event === "pusher_internal:member_removed", "member_removed");
+    if (removed.parsed.user_id !== "u2") throw new Error("wrong member_removed");
+    a.close(); b.close();
+  });
+
+  await step("presence: bad signature rejected", async () => {
+    const c = client();
+    const est = await establish(c);
+    c.send({ event: "pusher:subscribe", data: { channel: "presence-x", auth: "resonance-key:deadbeef", channel_data: '{"user_id":"u9"}' } });
+    const err = await c.waitFor((f) => f.event === "pusher:error", "error");
+    if (err.parsed.code !== 4009) throw new Error(`expected 4009, got ${err.parsed.code}`);
+    c.close();
+  });
+
+  await step("client events: relayed to peers, not sender, private only", async () => {
+    const a = client(); const b = client();
+    const ea = await establish(a); const eb = await establish(b);
+    const ch = "private-chat";
+    for (const [c, est] of [[a, ea], [b, eb]]) {
+      const auth = server.authorizeChannel(est.parsed.socket_id, ch);
+      c.send({ event: "pusher:subscribe", data: { channel: ch, auth: auth.auth } });
+      await c.waitFor((f) => f.event === "pusher_internal:subscription_succeeded" && f.channel === ch, "sub");
+    }
+    a.send({ event: "client-typing", channel: ch, data: { user: "alice" } });
+    const got = await b.waitFor((f) => f.event === "client-typing", "client event on B");
+    if (got.data.user !== "alice") throw new Error(`bad payload: ${JSON.stringify(got.data)}`);
+    await wait(200);
+    if (a.has((f) => f.event === "client-typing")) throw new Error("echoed back to sender");
+    // not allowed on public channels
+    a.send({ event: "pusher:subscribe", data: { channel: "pub" } });
+    await a.waitFor((f) => f.event === "pusher_internal:subscription_succeeded" && f.channel === "pub", "sub pub");
+    a.send({ event: "client-nope", channel: "pub", data: {} });
+    const err = await a.waitFor((f) => f.event === "pusher:error", "public refusal");
+    if (err.parsed.code !== 4009) throw new Error("public channel client event not refused");
+    a.close(); b.close();
+  });
+
+  await step("client events: rate limited (>10/s -> 4301)", async () => {
+    const a = client(); const b = client();
+    const ea = await establish(a); await establish(b);
+    const ch = "private-flood";
+    const auth = server.authorizeChannel(ea.parsed.socket_id, ch);
+    a.send({ event: "pusher:subscribe", data: { channel: ch, auth: auth.auth } });
+    await a.waitFor((f) => f.event === "pusher_internal:subscription_succeeded" && f.channel === ch, "sub");
+    for (let i = 0; i < 15; i++) a.send({ event: "client-spam", channel: ch, data: { i } });
+    const err = await a.waitFor((f) => f.event === "pusher:error" && f.parsed.code === 4301, "rate limit error");
+    if (!err) throw new Error("no rate limit");
+    a.close(); b.close();
+  });
+
   const failed = results.filter(([, ok]) => !ok);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);
   process.exit(failed.length ? 1 : 0);

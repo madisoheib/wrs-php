@@ -25,6 +25,8 @@ pub struct Limits {
     pub max_channels_per_connection: usize,
     // Browser origins allowed to open WS connections. Empty = allow all (dev).
     pub allowed_origins: Vec<String>,
+    // client-* events per second per connection (Pusher default ~10).
+    pub client_event_rate: u32,
 }
 
 pub struct Conn {
@@ -40,10 +42,18 @@ pub struct Sub {
     pub kill: Arc<Notify>,
 }
 
+#[derive(Clone)]
+pub struct PresenceMember {
+    pub user_id: String,
+    pub user_info: serde_json::Value,
+}
+
 #[derive(Default)]
 pub struct ChannelState {
     // socket_id -> subscriber handle
     pub subscribers: HashMap<String, Sub>,
+    // presence channels only: socket_id -> member identity
+    pub presence: Option<HashMap<String, PresenceMember>>,
 }
 
 pub struct State {

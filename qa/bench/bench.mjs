@@ -101,7 +101,9 @@ async function fanout() {
 }
 
 async function sustained() {
-  const N = Math.min(CONNS, 500), RATE = 100, SECONDS = 5;
+  const N = CONNS,
+    RATE = Number(process.env.BENCH_RATE || 100),
+    SECONDS = Number(process.env.BENCH_SECONDS || 5);
   const sendTimes = new Map();
   const latencies = [];
   let received = 0;
@@ -109,6 +111,7 @@ async function sustained() {
     if (ev === "tick" && d && sendTimes.has(d.seq)) { latencies.push(performance.now() - sendTimes.get(d.seq)); received++; }
   });
   await subscribeAll(clients, "bench");
+  console.log("SUBSCRIBED"); // marker: sampler starts measuring from here
   await wait(300);
   const total = RATE * SECONDS;
   const interval = 1000 / RATE;

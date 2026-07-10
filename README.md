@@ -97,11 +97,12 @@ Every value can be overridden by environment (`RESONANCE_HOST`, `RESONANCE_PORT`
 
 ### 3. Point your app at it
 
-**Laravel** — use [`resonance/resonance-laravel`](https://github.com/madisoheib/resonance-laravel):
+**Laravel** (6 through 13) — use
+[`resonance/resonance-laravel`](https://github.com/madisoheib/resonance-laravel):
 
 ```bash
 composer require resonance/resonance-laravel
-php artisan resonance:install   # downloads the right binary for your OS/arch
+php artisan resonance:install   # downloads the binary + configures .env (credentials generated)
 php artisan resonance:start
 ```
 

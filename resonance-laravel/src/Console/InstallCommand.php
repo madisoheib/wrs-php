@@ -7,8 +7,8 @@ use Resonance\Laravel\Platform;
 
 class InstallCommand extends Command
 {
-    protected $signature = 'resonance:install {--version= : Release tag (default: config/latest)} {--force}';
-    protected $description = 'Download the resonance server binary for this OS/architecture.';
+    protected $signature = 'resonance:install {--version= : Release tag (default: config/latest)} {--force} {--no-env : Do not touch the .env file}';
+    protected $description = 'Download the resonance server binary and configure broadcasting in .env.';
 
     public function handle(): int
     {
@@ -56,7 +56,53 @@ class InstallCommand extends Command
         chmod($bin, 0755);
         $this->info("Installed resonance to {$bin}");
 
+        if (! $this->option('no-env')) {
+            $this->configureEnv();
+        }
+        $this->info('Done. Run: php artisan resonance:start');
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Point broadcasting at resonance and generate app credentials, so
+     * `resonance:start` + `broadcast()` work immediately after install.
+     * Existing RESONANCE_* values are never overwritten.
+     */
+    private function configureEnv(): void
+    {
+        $path = base_path('.env');
+        if (! is_file($path)) {
+            $this->warn('No .env file found — skipping broadcasting configuration.');
+            return;
+        }
+        $env = file_get_contents($path);
+
+        $set = function (string $key, string $value, bool $overwrite) use (&$env) {
+            if (preg_match("/^{$key}=.*$/m", $env)) {
+                if ($overwrite) {
+                    $env = preg_replace("/^{$key}=.*$/m", "{$key}={$value}", $env);
+                    $this->line("  {$key}={$value}");
+                }
+                return;
+            }
+            $env = rtrim($env, "\n") . "\n{$key}={$value}\n";
+            $this->line("  {$key}={$value}");
+        };
+
+        $this->info('Configuring .env:');
+        // Both spellings so every Laravel version picks up the driver
+        // (BROADCAST_DRIVER <= 10, BROADCAST_CONNECTION >= 11).
+        $set('BROADCAST_DRIVER', 'resonance', true);
+        $set('BROADCAST_CONNECTION', 'resonance', true);
+        $set('RESONANCE_APP_ID', 'app-' . bin2hex(random_bytes(4)), false);
+        $set('RESONANCE_KEY', bin2hex(random_bytes(16)), false);
+        $set('RESONANCE_SECRET', bin2hex(random_bytes(16)), false);
+        $set('RESONANCE_HOST', '127.0.0.1', false);
+        $set('RESONANCE_PORT', '8080', false);
+        $set('RESONANCE_SCHEME', 'http', false);
+
+        file_put_contents($path, $env);
     }
 
     /** Download a URL following redirects; null on any non-200. */

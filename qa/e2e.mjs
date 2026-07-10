@@ -82,6 +82,31 @@ async function main() {
     await server.trigger("empty-channel", "x", { ok: true });
   });
 
+  await step("triggerBatch delivers to multiple channels", async () => {
+    const c1 = client.subscribe("batch-a");
+    const c2 = client.subscribe("batch-b");
+    await Promise.all([subscribed(c1), subscribed(c2)]);
+    const got1 = receive(c1, "ev");
+    const got2 = receive(c2, "ev");
+    await wait(100);
+    await server.triggerBatch([
+      { channel: "batch-a", name: "ev", data: JSON.stringify({ n: 1 }) },
+      { channel: "batch-b", name: "ev", data: JSON.stringify({ n: 2 }) },
+    ]);
+    const [d1, d2] = await Promise.all([got1, got2]);
+    if (d1.n !== 1 || d2.n !== 2) throw new Error(`bad payloads ${JSON.stringify([d1, d2])}`);
+  });
+
+  await step("GET /channels + /channels/{name} inspection", async () => {
+    const res = await server.get({ path: "/channels", params: {} });
+    const body = await res.json();
+    if (!("news" in body.channels)) throw new Error(`news missing: ${JSON.stringify(body)}`);
+    const one = await (await server.get({ path: "/channels/news", params: {} })).json();
+    if (one.occupied !== true || one.subscription_count < 1) throw new Error(JSON.stringify(one));
+    const empty = await (await server.get({ path: "/channels/ghost-channel", params: {} })).json();
+    if (empty.occupied !== false) throw new Error(JSON.stringify(empty));
+  });
+
   client.disconnect();
   const failed = results.filter(([, ok]) => !ok);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);

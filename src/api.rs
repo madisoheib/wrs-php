@@ -33,12 +33,49 @@ pub async fn events(
         Err(_) => return err(400, "Invalid body"),
     };
 
+    if publish(&state, &app.id, &payload).is_err() {
+        return err(400, "Missing data");
+    }
+    (StatusCode::OK, Json(serde_json::json!({})))
+}
+
+/// POST /apps/{app_id}/batch_events — `{"batch":[{name,channel,data,...}, ...]}`
+/// (what pusher-php-server's triggerBatch sends).
+pub async fn batch_events(
+    AxState(state): AxState<Arc<State>>,
+    Path(app_id): Path<String>,
+    Query(q): Query<BTreeMap<String, String>>,
+    body: Bytes,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let app = match state.app_by_id(&app_id) {
+        Some(a) => a.clone(),
+        None => return err(404, "Unknown app"),
+    };
+    if let Err(msg) = verify(&app.key, &app.secret, "POST", &format!("/apps/{app_id}/batch_events"), &q, &body) {
+        return err(401, msg);
+    }
+    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return err(400, "Invalid body"),
+    };
+    let batch = match payload.get("batch").and_then(|b| b.as_array()) {
+        Some(b) => b,
+        None => return err(400, "Missing batch"),
+    };
+    for event in batch {
+        let _ = publish(&state, &app.id, event); // skip malformed entries, deliver the rest
+    }
+    (StatusCode::OK, Json(serde_json::json!({"batch": []})))
+}
+
+/// Fan an event out to its channel(s). Payload: {name, data, channel|channels, socket_id?}.
+fn publish(state: &State, app_id: &str, payload: &serde_json::Value) -> Result<(), ()> {
     let name = payload.get("name").and_then(|n| n.as_str()).unwrap_or("");
     // data is already a JSON-encoded string from the client.
     let data = match payload.get("data") {
         Some(serde_json::Value::String(s)) => s.clone(),
         Some(other) => other.to_string(),
-        None => return err(400, "Missing data"),
+        None => return Err(()),
     };
     let except = payload.get("socket_id").and_then(|s| s.as_str());
 
@@ -59,7 +96,7 @@ pub async fn events(
         // bumps only — no allocation per subscriber), release before sending.
         let targets: Vec<crate::state::Sub> = match state
             .channels
-            .get(&(app.id.clone(), channel.clone()))
+            .get(&(app_id.to_string(), channel.clone()))
         {
             Some(cs) => cs
                 .subscribers
@@ -78,8 +115,103 @@ pub async fn events(
             }
         }
     }
+    Ok(())
+}
 
-    (StatusCode::OK, Json(serde_json::json!({})))
+/// GET /apps/{app_id}/channels — occupied channels (optional ?filter_by_prefix=).
+pub async fn channels_index(
+    AxState(state): AxState<Arc<State>>,
+    Path(app_id): Path<String>,
+    Query(q): Query<BTreeMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let app = match state.app_by_id(&app_id) {
+        Some(a) => a.clone(),
+        None => return err(404, "Unknown app"),
+    };
+    if let Err(msg) = verify(&app.key, &app.secret, "GET", &format!("/apps/{app_id}/channels"), &q, b"") {
+        return err(401, msg);
+    }
+    let prefix = q.get("filter_by_prefix").map(String::as_str).unwrap_or("");
+    let want_user_count = q.get("info").map(|i| i.contains("user_count")).unwrap_or(false);
+
+    let mut out = serde_json::Map::new();
+    for e in state.channels.iter() {
+        let (aid, name) = e.key();
+        if aid != &app.id || !name.starts_with(prefix) {
+            continue;
+        }
+        let mut info = serde_json::Map::new();
+        if want_user_count {
+            if let Some(p) = &e.value().presence {
+                let users: std::collections::HashSet<&str> =
+                    p.values().map(|m| m.user_id.as_str()).collect();
+                info.insert("user_count".into(), users.len().into());
+            }
+        }
+        out.insert(name.clone(), serde_json::Value::Object(info));
+    }
+    (StatusCode::OK, Json(serde_json::json!({"channels": out})))
+}
+
+/// GET /apps/{app_id}/channels/{name} — occupancy + counts for one channel.
+pub async fn channel_show(
+    AxState(state): AxState<Arc<State>>,
+    Path((app_id, name)): Path<(String, String)>,
+    Query(q): Query<BTreeMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let app = match state.app_by_id(&app_id) {
+        Some(a) => a.clone(),
+        None => return err(404, "Unknown app"),
+    };
+    if let Err(msg) = verify(&app.key, &app.secret, "GET", &format!("/apps/{app_id}/channels/{name}"), &q, b"") {
+        return err(401, msg);
+    }
+    let mut out = serde_json::Map::new();
+    match state.channels.get(&(app.id.clone(), name.clone())) {
+        Some(cs) => {
+            out.insert("occupied".into(), true.into());
+            out.insert("subscription_count".into(), cs.subscribers.len().into());
+            if let Some(p) = &cs.presence {
+                let users: std::collections::HashSet<&str> =
+                    p.values().map(|m| m.user_id.as_str()).collect();
+                out.insert("user_count".into(), users.len().into());
+            }
+        }
+        None => {
+            out.insert("occupied".into(), false.into());
+        }
+    }
+    (StatusCode::OK, Json(serde_json::Value::Object(out)))
+}
+
+/// GET /apps/{app_id}/channels/{name}/users — presence member ids.
+pub async fn channel_users(
+    AxState(state): AxState<Arc<State>>,
+    Path((app_id, name)): Path<(String, String)>,
+    Query(q): Query<BTreeMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let app = match state.app_by_id(&app_id) {
+        Some(a) => a.clone(),
+        None => return err(404, "Unknown app"),
+    };
+    if let Err(msg) = verify(&app.key, &app.secret, "GET", &format!("/apps/{app_id}/channels/{name}/users"), &q, b"") {
+        return err(401, msg);
+    }
+    if !name.starts_with("presence-") {
+        return err(400, "Users can only be retrieved for presence channels");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut users = Vec::new();
+    if let Some(cs) = state.channels.get(&(app.id.clone(), name.clone())) {
+        if let Some(p) = &cs.presence {
+            for m in p.values() {
+                if seen.insert(m.user_id.clone()) {
+                    users.push(serde_json::json!({"id": m.user_id}));
+                }
+            }
+        }
+    }
+    (StatusCode::OK, Json(serde_json::json!({"users": users})))
 }
 
 /// Verify the Pusher REST auth scheme (what pusher-php-server generates).
@@ -105,12 +237,15 @@ fn verify(
         return Err("Stale auth_timestamp");
     }
 
-    // Required: the HMAC only covers the query string, so without body_md5 the
-    // body itself would be unauthenticated (replayable with a swapped payload).
-    let expected_md5 = q.get("body_md5").ok_or("Missing body_md5")?;
-    let got = hex::encode(Md5::digest(body));
-    if got.as_bytes().ct_eq(expected_md5.as_bytes()).unwrap_u8() == 0 {
-        return Err("body_md5 mismatch");
+    // Required whenever there IS a body: the HMAC only covers the query string,
+    // so without body_md5 the body would be unauthenticated (replayable with a
+    // swapped payload). GET requests have no body and no body_md5.
+    if !body.is_empty() {
+        let expected_md5 = q.get("body_md5").ok_or("Missing body_md5")?;
+        let got = hex::encode(Md5::digest(body));
+        if got.as_bytes().ct_eq(expected_md5.as_bytes()).unwrap_u8() == 0 {
+            return Err("body_md5 mismatch");
+        }
     }
 
     let provided = q.get("auth_signature").ok_or("Missing auth_signature")?;

@@ -167,6 +167,10 @@ async fn main() {
     let app = Router::new()
         .route("/app/{key}", get(ws_route))
         .route("/apps/{app_id}/events", post(api::events))
+        .route("/apps/{app_id}/batch_events", post(api::batch_events))
+        .route("/apps/{app_id}/channels", get(api::channels_index))
+        .route("/apps/{app_id}/channels/{name}", get(api::channel_show))
+        .route("/apps/{app_id}/channels/{name}/users", get(api::channel_users))
         .with_state(state.clone());
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

@@ -189,6 +189,7 @@ async fn main() {
         .route("/apps/{app_id}/channels", get(api::channels_index))
         .route("/apps/{app_id}/channels/{name}", get(api::channel_show))
         .route("/apps/{app_id}/channels/{name}/users", get(api::channel_users))
+        .route("/metrics", get(api::metrics))
         .with_state(state.clone());
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

@@ -134,6 +134,8 @@ $pusher->trigger('my-channel', 'my-event', ['hello' => 'world']);
 - Slow-consumer protection: bounded per-connection buffers, non-blocking fan-out,
   laggards are disconnected instead of degrading everyone else
 - Dead-connection eviction (server ping after `activity_timeout`, 30 s grace)
+- Prometheus metrics at `GET /metrics` (connections, channels, events in,
+  messages out, slow-consumer kills)
 
 Native TLS (rustls) is on the [roadmap](project.md) — terminate at your proxy meanwhile.
 

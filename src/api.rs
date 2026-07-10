@@ -87,6 +87,7 @@ fn publish(state: &State, app_id: &str, payload: &serde_json::Value) -> Result<(
         channels.extend(arr.iter().filter_map(|c| c.as_str()).map(String::from));
     }
 
+    state.metrics.events_received_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for channel in &channels {
         // Serialize the outgoing frame ONCE per channel; each subscriber gets a
         // cheap refcounted clone (Utf8Bytes/Bytes), never a re-serialization.
@@ -107,15 +108,47 @@ fn publish(state: &State, app_id: &str, payload: &serde_json::Value) -> Result<(
             None => continue,
         };
 
+        let mut sent = 0u64;
         for sub in targets {
             // Non-blocking. Full buffer == slow consumer: kill it so it can't
             // drag down the fan-out for everyone else.
             if sub.tx.try_send(msg.clone()).is_err() {
                 sub.kill.notify_one();
+                state.metrics.slow_consumers_killed_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                sent += 1;
             }
         }
+        state.metrics.messages_sent_total.fetch_add(sent, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// GET /metrics — Prometheus text exposition. Unauthenticated by convention;
+/// firewall it or keep the port internal in production.
+pub async fn metrics(AxState(state): AxState<Arc<State>>) -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let m = &state.metrics;
+    format!(
+        "# TYPE resonance_connections gauge\n\
+         resonance_connections {}\n\
+         # TYPE resonance_channels gauge\n\
+         resonance_channels {}\n\
+         # TYPE resonance_connections_total counter\n\
+         resonance_connections_total {}\n\
+         # TYPE resonance_events_received_total counter\n\
+         resonance_events_received_total {}\n\
+         # TYPE resonance_messages_sent_total counter\n\
+         resonance_messages_sent_total {}\n\
+         # TYPE resonance_slow_consumers_killed_total counter\n\
+         resonance_slow_consumers_killed_total {}\n",
+        state.connections.len(),
+        state.channels.len(),
+        m.connections_total.load(Relaxed),
+        m.events_received_total.load(Relaxed),
+        m.messages_sent_total.load(Relaxed),
+        m.slow_consumers_killed_total.load(Relaxed),
+    )
 }
 
 /// GET /apps/{app_id}/channels — occupied channels (optional ?filter_by_prefix=).

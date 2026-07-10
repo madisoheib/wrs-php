@@ -62,12 +62,21 @@ pub struct WebhookEvent {
     pub event: serde_json::Value,
 }
 
+#[derive(Default)]
+pub struct Metrics {
+    pub connections_total: AtomicU64,      // ever accepted
+    pub events_received_total: AtomicU64,  // REST events ingested
+    pub messages_sent_total: AtomicU64,    // frames fanned out
+    pub slow_consumers_killed_total: AtomicU64,
+}
+
 pub struct State {
     pub apps: Vec<App>, // a handful, from config — linear scan is fine
     pub connections: DashMap<String, Conn>,
     pub channels: DashMap<ChannelKey, ChannelState>,
     pub limits: Limits,
     pub webhooks: Option<mpsc::Sender<WebhookEvent>>,
+    pub metrics: Metrics,
     socket_seq: AtomicU64,
     socket_hi: u64,
 }
@@ -96,6 +105,7 @@ impl State {
             channels: DashMap::new(),
             limits,
             webhooks,
+            metrics: Metrics::default(),
             socket_seq: AtomicU64::new(1),
             socket_hi: hi,
         })

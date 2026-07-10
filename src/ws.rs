@@ -20,6 +20,7 @@ pub async fn handle(ws: WebSocket, state: Arc<State>, app: App) {
     let (tx, rx) = mpsc::channel::<Message>(64);
     let kill = Arc::new(Notify::new());
     state.connections.insert(socket_id.clone(), Conn { app_id: app.id.clone() });
+    state.metrics.connections_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     // Handshake: activity_timeout advertised to the client.
     let est = serde_json::json!({

@@ -12,8 +12,19 @@ permissions:
   packages: write
 
 jobs:
+  # Create the release once, up front, so the matrix jobs only ATTACH assets.
+  # Without this, five jobs race to create the same release and one loses (422).
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+
   build:
+    needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-musl

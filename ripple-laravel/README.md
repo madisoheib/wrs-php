@@ -1,9 +1,16 @@
-# Ripple for Laravel
+<p align="center">
+  <img src="logo.png" alt="Ripple" width="360">
+</p>
 
-**Laravel broadcasting driver for [Ripple](https://github.com/madisoheib/ripple)
-— a self-hosted, Pusher-compatible WebSocket server shipped as a single static binary.**
+<h1 align="center">Ripple for Laravel</h1>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <strong>Laravel broadcasting driver for <a href="https://github.com/madisoheib/ripple">Ripple</a> — a self-hosted, Pusher-compatible WebSocket server shipped as a single static binary.</strong>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
 No Redis, no Node, no PHP extensions. The server speaks the Pusher protocol, so
 Laravel Echo and your existing broadcasting code work unchanged — this package

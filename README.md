@@ -1,10 +1,16 @@
-# Ripple
+<p align="center">
+  <img src="logo.png" alt="Ripple" width="360">
+</p>
 
-**Self-hosted, Pusher-compatible WebSocket server for the PHP ecosystem — a single static binary.**
+<p align="center">
+  <strong>Self-hosted, Pusher-compatible WebSocket server for the PHP ecosystem — a single static binary.</strong>
+</p>
 
-[![CI](https://github.com/madisoheib/ripple/actions/workflows/ci.yml/badge.svg)](https://github.com/madisoheib/ripple/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/madisoheib/ripple)](https://github.com/madisoheib/ripple/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/madisoheib/ripple/actions/workflows/ci.yml"><img src="https://github.com/madisoheib/ripple/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/madisoheib/ripple/releases"><img src="https://img.shields.io/github/v/release/madisoheib/ripple" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
 Ripple speaks the Pusher Channels protocol, so every existing client works
 unchanged: **Laravel Echo**, **pusher-js**, **pusher-php-server**, mobile SDKs.

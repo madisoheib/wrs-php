@@ -226,8 +226,26 @@ async fn main() {
             .await
             .unwrap();
     } else {
-        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
+        // Explicit large accept backlog: std's default of 128 drops SYNs during
+        // connection storms (mass reconnects after a deploy). Capped by
+        // net.core.somaxconn — document raising it.
+        let sock_addr: std::net::SocketAddr = addr.parse().unwrap_or_else(|e| {
+            eprintln!("Invalid listen address {addr}: {e}");
+            std::process::exit(1);
+        });
+        let socket = if sock_addr.is_ipv6() {
+            tokio::net::TcpSocket::new_v6()
+        } else {
+            tokio::net::TcpSocket::new_v4()
+        }
+        .expect("create socket");
+        socket.set_reuseaddr(true).ok();
+        socket.bind(sock_addr).unwrap_or_else(|e| {
             eprintln!("Cannot bind {addr}: {e}");
+            std::process::exit(1);
+        });
+        let listener = socket.listen(8192).unwrap_or_else(|e| {
+            eprintln!("Cannot listen on {addr}: {e}");
             std::process::exit(1);
         });
         // Latency beats throughput for real-time: disable Nagle on every socket.

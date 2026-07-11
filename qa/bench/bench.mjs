@@ -6,8 +6,9 @@ import WebSocket from "ws";
 import { performance } from "node:perf_hooks";
 
 const APP = { id: "app1", key: "resonance-key", secret: "resonance-secret" };
+const HOST = process.env.BENCH_HOST || "127.0.0.1";
 const TARGETS = {
-  resonance: { wsPort: 8080, restPort: "8080" },
+  resonance: { wsPort: Number(process.env.BENCH_PORT || 8080), restPort: process.env.BENCH_PORT || "8080" },
   reverb: { wsPort: 8081, restPort: "8081" },
 };
 
@@ -19,10 +20,10 @@ if (!t || !scenario) { console.error("usage: node bench.mjs <resonance|reverb> <
 
 const server = new PusherServer({
   appId: APP.id, key: APP.key, secret: APP.secret,
-  host: "127.0.0.1", port: t.restPort, useTLS: false,
+  host: HOST, port: t.restPort, useTLS: false,
 });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const url = `ws://127.0.0.1:${t.wsPort}/app/${APP.key}?protocol=7&client=bench&version=1`;
+const url = `ws://${HOST}:${t.wsPort}/app/${APP.key}?protocol=7&client=bench&version=1`;
 
 function pct(arr, q) {
   if (!arr.length) return null;
@@ -62,6 +63,8 @@ async function connectAll(n, onEvent) {
       }, 20);
     })));
     failed = clients.filter((c) => c.failed).length;
+    const pace = Number(process.env.BENCH_BATCH_DELAY || 0);
+    if (pace) await wait(pace);
   }
   const ok = clients.filter((c) => c.established && !c.failed);
   if (ok.length < n) console.error(`  warn: only ${ok.length}/${n} connected (${failed} failed)`);
@@ -79,21 +82,22 @@ async function subscribeAll(clients, channel) {
 async function idle() {
   const clients = await connectAll(CONNS);
   console.log(`READY ${clients.length} connections established`);
-  await wait(20000); // hold while the orchestrator samples docker stats
+  await wait(Number(process.env.BENCH_HOLD || 20000)); // hold while the orchestrator samples
   process.exit(0);
 }
 
 async function fanout() {
   const latencies = [];
   let t0 = 0, received = 0;
-  const clients = await connectAll(CONNS, (ev) => {
-    if (ev === "boom") { latencies.push(performance.now() - t0); received++; }
+  const clients = await connectAll(CONNS, (ev, d) => {
+    if (ev === "boom") { latencies.push(Date.now() - (d && d.at ? d.at : t0)); received++; }
   });
   await subscribeAll(clients, "bench");
+  console.log("SUBSCRIBED");
   await wait(300);
-  t0 = performance.now();
-  await server.trigger("bench", "boom", { at: t0 });
-  const deadline = performance.now() + 10000;
+  t0 = Date.now();
+  if (!process.env.BENCH_WAIT_TRIGGER) await server.trigger("bench", "boom", { at: t0 });
+  const deadline = performance.now() + (process.env.BENCH_WAIT_TRIGGER ? 30000 : 10000);
   while (received < clients.length && performance.now() < deadline) await wait(20);
   result({ scenario: "fanout", target, conns: clients.length, delivered: received,
     p50_ms: pct(latencies, 0.5), p99_ms: pct(latencies, 0.99), max_ms: pct(latencies, 1) });

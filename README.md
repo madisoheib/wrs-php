@@ -29,12 +29,23 @@ No Redis, no Node, no PHP extensions — download one binary and run it.
 | Slow-client protection | managed | ❌ unbounded buffering | partial (backpressure config) | ✅ bounded buffers + disconnect |
 | Status | commercial | active (Laravel official) | maintenance slowed since 2024 | early (v0) |
 
-### Measured head-to-head — Resonance vs Reverb
+### Measured head-to-head — Resonance vs Reverb (Linux, 2 pinned cores each)
 
-Same host, same scenario, same client, 1 000 connections. Scripts in
-[`qa/bench/`](qa/bench) — reproduce before quoting. Soketi is not in the table
-because we haven't benchmarked it yet on this harness; we don't publish
-numbers we didn't measure.
+AWS c6i.xlarge, servers pinned to 2 cores, full methodology and caveats in
+[`bench/RESULTS.md`](bench/RESULTS.md):
+
+| Metric | Resonance | Reverb (tuned¹) |
+|---|---|---|
+| 60,000 idle connections | ✅ 770 MiB, 100% established | not attempted |
+| Memory @ 40k connections | **512 MiB** (~12.8 KB/conn) | 834 MiB (~20 KB/conn) |
+| Sustained 50k deliveries/s — p50 / p99 | **14.7 / 32 ms** | 24.6 / **254 ms** |
+| CPU at that load (share of its ceiling) | **~13%** (2 cores usable) | 62% (1 core, hard cap) |
+| Fan-out 1 event → 10k subs | p50 94 ms | p50 122 ms |
+
+Earlier same-machine Docker runs (1k conns) told the same story: ~2× lower
+latency, ~3× less memory, bounded slow-consumer behavior vs unbounded
+buffering. Soketi is absent because we haven't run it on this harness yet —
+we don't publish numbers we didn't measure.
 
 | Metric | Resonance | Reverb (tuned¹) |
 |---|---|---|

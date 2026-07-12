@@ -19,4 +19,14 @@ return [
         'repo'    => env('RIPPLE_REPO', 'madisoheib/ripple'),
         'version' => env('RIPPLE_VERSION', 'latest'),
     ],
+
+    // Web dashboard (Horizon-style) to watch connections, channels and health.
+    'dashboard' => [
+        'enabled' => env('RIPPLE_DASHBOARD', true),
+        'path'    => env('RIPPLE_DASHBOARD_PATH', 'ripple'),
+        'middleware' => ['web'],
+        // Server metrics endpoint (unauthenticated by design — keep it internal).
+        // Defaults to the same host/port as the server above.
+        'metrics_url' => env('RIPPLE_METRICS_URL'),
+    ],
 ];

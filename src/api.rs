@@ -210,7 +210,11 @@ pub async fn channels_index(
         return err(401, msg);
     }
     let prefix = q.get("filter_by_prefix").map(String::as_str).unwrap_or("");
-    let want_user_count = q.get("info").map(|i| i.contains("user_count")).unwrap_or(false);
+    let info = q.get("info").map(String::as_str).unwrap_or("");
+    let want_user_count = info.contains("user_count");
+    // subscription_count in the index is a Ripple extension (real Pusher only
+    // exposes it on the single-channel endpoint) — handy for the dashboard.
+    let want_sub_count = info.contains("subscription_count");
 
     let mut out = serde_json::Map::new();
     for e in state.channels.iter() {
@@ -219,6 +223,9 @@ pub async fn channels_index(
             continue;
         }
         let mut info = serde_json::Map::new();
+        if want_sub_count {
+            info.insert("subscription_count".into(), e.value().subscribers.len().into());
+        }
         if want_user_count {
             if let Some(p) = &e.value().presence {
                 let users: std::collections::HashSet<&str> =

@@ -56,6 +56,30 @@ php artisan ripple:start
 
 That's it — `broadcast(new MyEvent())` and Laravel Echo work.
 
+## Dashboard
+
+A Horizon-style debug page ships with the package at **`/ripple`**. It shows,
+live (2s refresh):
+
+- server health (reachable? credentials OK?) with an error banner when not
+- connections, channels, events in, messages out, **slow-consumer kills**,
+  last fan-out time
+- every occupied channel with its type and subscriber / presence-user counts
+- a **Send test broadcast** button to confirm the full path end-to-end
+
+It reads the same config as the broadcaster, so if broadcasting works, the
+dashboard works — nothing extra to configure. In production it's **dev-only by
+default** (visible only when `APP_DEBUG` or the `local` environment); gate it
+explicitly with:
+
+```php
+// AppServiceProvider::boot()
+Gate::define('viewRipple', fn ($user) => in_array($user->email, ['you@example.com']));
+```
+
+Configure via `config/ripple.php` → `dashboard` (`enabled`, `path`,
+`middleware`, `metrics_url`).
+
 ## Configuration
 
 Switching an existing Pusher/Reverb app is **environment-only** — no code changes:

@@ -172,6 +172,8 @@ $pusher->trigger('my-channel', 'my-event', ['hello' => 'world']);
   closes). Pusher clients auto-reconnect, so deploys are seamless.
 - Prometheus metrics at `GET /metrics` (connections, channels, events in,
   messages out, slow-consumer kills, fan-out distribution time)
+- **Laravel dashboard** (Horizon-style) at `/ripple` — live connections,
+  channels, health and a test-broadcast button (ships with the package)
 - Boot-time warning when `ulimit -n` would cap your connection target
 - Native TLS (rustls): add a `[tls]` table with `cert`/`key` PEM paths to serve
   `wss://` directly — or omit it and terminate TLS at your proxy

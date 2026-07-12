@@ -93,11 +93,14 @@ jobs:
           curl -sSL -o ripple \
             "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ripple-x86_64-unknown-linux-musl"
           chmod +x ripple
+      # ghcr requires a lowercase repository name; the repo is displayed "Ripple".
+      - name: Lowercase image name
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.ci
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
